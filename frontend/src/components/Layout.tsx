@@ -97,7 +97,7 @@ export default function Layout(props: RouteSectionProps) {
                       Wallet & limits
                     </A>
                     <A href="/verification" class="block rounded-lg px-3 py-2 text-sm hover:bg-ink-800" onClick={() => setMenuOpen(false)}>
-                      Verify identity
+                      Profile & verification
                     </A>
                     <A href="/bets" class="block rounded-lg px-3 py-2 text-sm hover:bg-ink-800" onClick={() => setMenuOpen(false)}>
                       My bets

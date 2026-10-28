@@ -4,6 +4,8 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +49,10 @@ public class KycService {
         this.props = props;
     }
 
+    /** What the player types in: date of birth and country are taken from their profile instead. */
+    public record Document(String firstName, String lastName, String documentType, String documentNumber,
+                           LocalDate documentExpiry) {}
+
     /** Null cap/deposited fields mean the user is verified and unlimited. */
     public record KycView(String status, boolean canWithdraw, BigDecimal depositCapTokens,
                           BigDecimal depositedTokens, KycRepository.Submission latest) {}
@@ -61,7 +67,7 @@ public class KycService {
     }
 
     @Transactional
-    public KycView submit(UUID userId, KycProvider.Applicant applicant) {
+    public KycView submit(UUID userId, Document document) {
         String status = repo.lockStatus(userId);
         if ("PENDING".equals(status) || "VERIFIED".equals(status)) {
             throw new DomainException(ErrorCode.KYC_ALREADY_SUBMITTED,
@@ -69,8 +75,14 @@ public class KycService {
         }
         rateLimiter.hit("kyc-submit:" + userId, 5, Duration.ofDays(1));
         var user = users.findById(userId).orElseThrow(() -> new NotFoundException("User"));
+        var applicant = new KycProvider.Applicant(document.firstName(), document.lastName(), user.dateOfBirth(),
+                document.documentType(), user.country(), document.documentNumber(), document.documentExpiry());
         String documentHash = documentHash(applicant);
-        var checks = provider.verify(applicant, new KycProvider.Profile(user.dateOfBirth(), user.country(),
+        var changes = users.profileChangesSince(userId, Instant.now().minus(Duration.ofDays(
+                        props.kyc().profileChangeReviewDays()))).stream()
+                .map(c -> new KycProvider.ProfileChange(c.field(), c.oldValue(), c.newValue(), c.changedAt()))
+                .toList();
+        var checks = provider.verify(applicant, new KycProvider.History(changes,
                 repo.documentUsedByAnotherUser(documentHash, userId)));
 
         var outcome = KycProvider.overall(checks);
@@ -113,6 +125,21 @@ public class KycService {
                         ? Map.of("userId", submission.userId())
                         : Map.of("userId", submission.userId(), "reason", reason)))
                 .update();
+    }
+
+    /**
+     * Runs inside a date-of-birth/country change: refused while a review is pending (the reviewer is looking at the
+     * old values), and a verification made against the old values no longer counts.
+     */
+    public void beforeProfileChange(UUID userId) {
+        String status = repo.lockStatus(userId);
+        if ("PENDING".equals(status)) {
+            throw new DomainException(ErrorCode.PROFILE_CHANGE_BLOCKED,
+                    "You can't change your date of birth or country while your verification is being reviewed");
+        }
+        if ("VERIFIED".equals(status)) {
+            repo.setStatus(userId, "NONE");
+        }
     }
 
     /** Withdrawals need a verified identity (AML: money only leaves to a known person). */

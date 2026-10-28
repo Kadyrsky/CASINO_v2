@@ -65,7 +65,7 @@ function ReviewItem(props: { match: Match; onDone: () => void }) {
   );
 }
 
-/** One flagged KYC submission: what the user sent next to what they registered with, and why it was flagged. */
+/** One flagged KYC submission: the identity details and why the automatic checks flagged it. */
 function KycReviewItem(props: { submission: KycSubmission; onDone: () => void }) {
   const [reason, setReason] = createSignal('');
   const [busy, setBusy] = createSignal(false);
@@ -82,13 +82,10 @@ function KycReviewItem(props: { submission: KycSubmission; onDone: () => void })
       setBusy(false);
     }
   };
-  const row = (label: string, submitted: string, registered?: string) => (
+  const row = (label: string, value: string) => (
     <div class="contents">
       <dt class="text-ink-400">{label}</dt>
-      <dd class={registered !== undefined && registered !== submitted ? 'font-semibold text-warn' : 'text-ink-200'}>
-        {submitted}
-        {registered !== undefined && registered !== submitted ? <span class="font-normal text-ink-400"> (registered: {registered})</span> : null}
-      </dd>
+      <dd class="text-ink-200">{value}</dd>
     </div>
   );
   return (
@@ -99,8 +96,8 @@ function KycReviewItem(props: { submission: KycSubmission; onDone: () => void })
       </div>
       <div class="grid gap-4 md:grid-cols-2">
         <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-          {row('Date of birth', s().dateOfBirth, s().profileDateOfBirth)}
-          {row('Country', countryName(s().documentCountry), countryName(s().profileCountry))}
+          {row('Date of birth', s().dateOfBirth)}
+          {row('Country', countryName(s().documentCountry))}
           {row('Document', `${humanize(s().documentType)} ···${s().documentNumberLast4}`)}
           {row('Expires', s().documentExpiry)}
         </dl>
@@ -153,7 +150,7 @@ export default function Admin() {
         </Show>
       </Card>
       <Card title="KYC review queue" class="mt-6" actions={<span class="text-xs text-ink-400">Flagged by the automatic checks</span>}>
-        <Show when={kycQueue.data?.length} fallback={<Empty title="No identities to review" icon="✓">Submissions land here when the automatic checks find a mismatch or a reused document.</Empty>}>
+        <Show when={kycQueue.data?.length} fallback={<Empty title="No identities to review" icon="✓">Submissions land here after a recent date-of-birth/country change or when a document is reused.</Empty>}>
           <ul class="divide-y divide-ink-800">
             <For each={kycQueue.data}>
               {(k) => <KycReviewItem submission={k} onDone={() => void queryClient.invalidateQueries({ queryKey: ['kyc-queue'] })} />}

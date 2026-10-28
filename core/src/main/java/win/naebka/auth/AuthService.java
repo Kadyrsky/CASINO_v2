@@ -17,6 +17,7 @@ import win.naebka.common.ErrorCode;
 import win.naebka.common.Exceptions.DomainException;
 import win.naebka.common.RateLimiter;
 import win.naebka.config.NaebkaProperties;
+import win.naebka.kyc.KycService;
 import win.naebka.wallet.WalletService;
 
 @Service
@@ -27,36 +28,35 @@ public class AuthService {
     private final JwtService jwt;
     private final WalletService wallets;
     private final RateLimiter rateLimiter;
+    private final KycService kyc;
     private final NaebkaProperties props;
 
     public AuthService(UserRepository users, SessionRepository sessions, PasswordEncoder passwordEncoder, JwtService jwt,
-                       WalletService wallets, RateLimiter rateLimiter, NaebkaProperties props) {
+                       WalletService wallets, RateLimiter rateLimiter, KycService kyc, NaebkaProperties props) {
         this.users = users;
         this.sessions = sessions;
         this.passwordEncoder = passwordEncoder;
         this.jwt = jwt;
         this.wallets = wallets;
         this.rateLimiter = rateLimiter;
+        this.kyc = kyc;
         this.props = props;
     }
 
     public record TokenResponse(String token, Instant expiresAt, UserView user) {}
 
-    public record UserView(UUID id, String username, String email, String role, String country, Instant createdAt) {
+    public record UserView(UUID id, String username, String email, String role, String country, LocalDate dateOfBirth,
+                           Instant createdAt) {
         static UserView of(UserRepository.UserRow u) {
-            return new UserView(u.id(), u.username(), u.email(), u.role(), u.country(), u.createdAt());
+            return new UserView(u.id(), u.username(), u.email(), u.role(), u.country(), u.dateOfBirth(),
+                    u.createdAt());
         }
     }
 
     @Transactional
     public UUID register(String username, String email, String password, LocalDate dateOfBirth, String country) {
         String cc = country.toUpperCase(Locale.ROOT);
-        if (Period.between(dateOfBirth, LocalDate.now()).getYears() < props.registration().minAge()) {
-            throw new DomainException(ErrorCode.UNDERAGE, "You must be at least " + props.registration().minAge());
-        }
-        if (!props.registration().licensedCountries().contains(cc)) {
-            throw new DomainException(ErrorCode.COUNTRY_NOT_LICENSED, "Naebka is not available in " + cc);
-        }
+        validateProfile(dateOfBirth, cc);
         if (users.usernameExists(username)) {
             throw new DomainException(ErrorCode.USERNAME_TAKEN, "Username already taken");
         }
@@ -66,6 +66,41 @@ public class AuthService {
         UUID id = users.insert(username, email, passwordEncoder.encode(password), "PLAYER", dateOfBirth, cc);
         wallets.createWallet(id, props.wallet().signupBonusTokens() * 100);
         return id;
+    }
+
+    /**
+     * Corrects date of birth / country (same rules as registration). Every change is recorded; it is refused while a
+     * KYC review is pending, and it ends an existing verification, since KYC was checked against the old values.
+     */
+    @Transactional
+    public UserView updateProfile(UUID userId, LocalDate dateOfBirth, String country) {
+        String cc = country.toUpperCase(Locale.ROOT);
+        validateProfile(dateOfBirth, cc);
+        var user = users.findById(userId).orElseThrow();
+        boolean dobChanged = !user.dateOfBirth().equals(dateOfBirth);
+        boolean countryChanged = !user.country().equals(cc);
+        if (!dobChanged && !countryChanged) {
+            return UserView.of(user);
+        }
+        kyc.beforeProfileChange(userId);
+        rateLimiter.hit("profile-change:" + userId, 3, Duration.ofDays(1));
+        if (dobChanged) {
+            users.recordProfileChange(userId, "date_of_birth", user.dateOfBirth().toString(), dateOfBirth.toString());
+        }
+        if (countryChanged) {
+            users.recordProfileChange(userId, "country", user.country(), cc);
+        }
+        users.updateProfile(userId, dateOfBirth, cc);
+        return UserView.of(users.findById(userId).orElseThrow());
+    }
+
+    private void validateProfile(LocalDate dateOfBirth, String country) {
+        if (Period.between(dateOfBirth, LocalDate.now()).getYears() < props.registration().minAge()) {
+            throw new DomainException(ErrorCode.UNDERAGE, "You must be at least " + props.registration().minAge());
+        }
+        if (!props.registration().licensedCountries().contains(country)) {
+            throw new DomainException(ErrorCode.COUNTRY_NOT_LICENSED, "Naebka is not available in " + country);
+        }
     }
 
     @Transactional(noRollbackFor = DomainException.class)

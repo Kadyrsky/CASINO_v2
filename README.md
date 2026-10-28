@@ -15,7 +15,7 @@ docker compose up --build
 ```
 
 Open <http://localhost:8080>, register (18+, licensed country), and you start with 1,000 NTK.
-To withdraw, verify your identity under **Verify identity** in the account menu (see [KYC](#kyc)).
+To withdraw, verify your identity under **Profile & verification** in the account menu (see [KYC](#kyc)).
 Live matches appear within ~10 s: the watcher picks fresh ranked games from `api.deadlock-api.com`.
 
 | Service | Port (host) | What it is |
@@ -72,8 +72,10 @@ flowchart LR
 Hybrid identity verification (Risk #5, "AML/KYC program absent"): automatic rules decide the clear cases, and
 anything ambiguous goes to a person.
 
-1. The player submits name, date of birth, document type, issuing country, document number and expiry
-   (`POST /api/kyc/submissions`, page `/verification`).
+1. The player submits name, document type, number and expiry (`POST /api/kyc/submissions`, page `/verification`).
+   Date of birth and country aren't asked again: they come from the profile given at registration. The player can
+   correct them on the same page (`PUT /api/auth/me`, same 18+ / licensed-country rules). Every change is kept in
+   `profile_changes`. A change is refused while a review is pending, and it ends an existing verification.
 2. `RuleBasedKycProvider` runs the checks. It sits behind the `KycProvider` interface, so a real vendor could be
    swapped in later (Strategy pattern).
 
@@ -81,7 +83,7 @@ anything ambiguous goes to a person.
    |---|---|
    | Age ≥ 18, issuing country licensed, document not expired | **FAIL**: auto-rejected, the player can fix it and resubmit |
    | Document number check digit (ICAO 9303: weights 7-3-1, mod 10) | **FAIL** |
-   | Date of birth / country match registration | **REVIEW**: goes to the admin KYC queue |
+   | Date of birth or country changed in the last 30 days | **REVIEW**: goes to the admin KYC queue |
    | Document already used by another account | **REVIEW** |
 
 3. Any FAIL → `REJECTED`; otherwise any REVIEW → `PENDING` (admin approves or rejects at `/admin`, which is
@@ -101,9 +103,9 @@ Germany, Hungary, Montenegro, Slovenia, Portugal, Belgium, Ireland, Bulgaria, Gr
 ## Tests
 
 ```bash
-# Java: 46 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules)
+# Java: 47 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules)
 cd core && mvn test
-# + 20 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
+# + 21 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
 cd core && mvn -Pit test
 
 # Python: 21 tests, mypy --strict
@@ -122,9 +124,9 @@ settle" via the scripted `MatchSimulator`):
 * Stream/report disagreement → `REVIEW`; void → stakes refunded.
 * 40 concurrent debits on one wallet → exactly 20 succeed, balance never negative, ledger sum = balance.
 * Idempotency keys move money once; the ledger rejects `UPDATE`/`DELETE`.
-* KYC: a clean submission is auto-verified, a bad check digit is auto-rejected and can be resubmitted, mismatches
-  and reused documents go to review, admin decisions are audited, unverified users can't withdraw and hit the
-  deposit cap.
+* KYC: a clean submission is auto-verified, a bad check digit is auto-rejected and can be resubmitted, a recent
+  profile change or a reused document goes to review, admin decisions are audited, profile edits are blocked during
+  review and end a verification, unverified users can't withdraw and hit the deposit cap.
 * HTTP: RFC 7807 errors, logout revokes the JWT, slot spin is verifiable after seed rotation, poker buy-in/cash-out.
 
 ## Where each design document lives in the code
@@ -144,7 +146,7 @@ settle" via the scripted `MatchSimulator`):
 | Hole-card masking, same-IP restriction (LLD §2.1) | `PokerTable.publicState()` / `privateState()`, `PokerService.sit()` |
 | WebSocket `{topic, seq, ts, data}` with `lastSeq` resume | `ws/WsHub.java`, `ws/NaebkaWebSocketHandler.java`, `frontend/src/lib/ws.ts` |
 | Responsible gambling (Risk #4) | `wallet/ResponsibleGamingService.java`: deposit/wager/loss limits, 24 h cooling-off on increases, self-exclusion |
-| KYC: hybrid auto + manual verification, tiered limits (Risk #5) | `kyc/*`, `db/migration/V3__kyc.sql`, `frontend/src/pages/Verification.tsx`, KYC queue in `/admin` |
+| KYC: hybrid auto + manual verification, tiered limits (Risk #5) | `kyc/*`, `db/migration/V3__kyc.sql`, `V4__profile_changes.sql`, `frontend/src/pages/Verification.tsx`, KYC queue in `/admin` |
 | CURRENCY_MODE compliance gate (Risk #13) | `config/CurrencyModeGuard.java`: REAL_MONEY refuses to start without the license sign-off file |
 | Frontend stack (Vite+, SolidJS, TS, Tailwind, TanStack, openapi-typescript, component registry) | `frontend/`; API types generated into `src/api/schema.d.ts` (`npm run gen:api`), shared components in `src/components/ui.tsx` |
 

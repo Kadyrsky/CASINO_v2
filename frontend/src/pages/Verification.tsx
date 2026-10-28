@@ -1,10 +1,11 @@
 import { createQuery, useQueryClient } from '@tanstack/solid-query';
-import { createSignal, For, Match, Show, Switch } from 'solid-js';
-import { ApiError, get, post } from '../api/client';
-import type { KycInfo } from '../api/types';
+import { createSignal, For, Match, onMount, Show, Switch } from 'solid-js';
+import { ApiError, get, post, put } from '../api/client';
+import type { KycInfo, KycStatus } from '../api/types';
 import { KYC_LABEL, KYC_TONE, KycChecks } from '../components/kyc';
 import { toast } from '../components/toast';
 import { Badge, Button, Card, Field, Input, PageHeader, Select, Spinner } from '../components/ui';
+import { auth } from '../lib/auth';
 import { countryName, dateTime, humanize, licensedCountries, tokens } from '../lib/format';
 
 /** ICAO 9303 check digit (same rule as the backend): 0-9, A-Z = 10-35, weights 7-3-1, mod 10. */
@@ -27,9 +28,96 @@ function testDocumentNumber(): string {
   return body + checkDigit(body);
 }
 
+/** "1995-05-05" → "5 May 1995" (a calendar date, so no time-zone shift). */
+function longDate(iso: string | undefined): string {
+  return iso ? new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }) : '—';
+}
+
+/** Date of birth and country, entered once at registration and used for KYC; editable here. */
+function ProfileCard(props: { kycStatus: KycStatus; onChanged: () => void }) {
+  const [editing, setEditing] = createSignal(false);
+  const [form, setForm] = createSignal({ dateOfBirth: '', country: '' });
+  const [errors, setErrors] = createSignal<Record<string, string>>({});
+  const [busy, setBusy] = createSignal(false);
+  const locked = () => props.kycStatus === 'PENDING';
+
+  const startEdit = () => {
+    setForm({ dateOfBirth: auth.user()?.dateOfBirth ?? '', country: auth.user()?.country ?? 'CZ' });
+    setErrors({});
+    setEditing(true);
+  };
+
+  const save = async (e: Event) => {
+    e.preventDefault();
+    setBusy(true);
+    setErrors({});
+    try {
+      await put('/api/auth/me', form());
+      await auth.reloadUser();
+      toast.success(props.kycStatus === 'VERIFIED' ? 'Profile updated. Please verify your identity again.' : 'Profile updated');
+      setEditing(false);
+      props.onChanged();
+    } catch (err) {
+      if (err instanceof ApiError && err.extra.fields) setErrors(err.extra.fields as Record<string, string>);
+      toast.error(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card
+      title="Personal details"
+      actions={
+        <Show when={!editing()}>
+          <Button size="sm" variant="ghost" disabled={locked()} onClick={startEdit}>Edit</Button>
+        </Show>
+      }
+    >
+      <Show
+        when={editing()}
+        fallback={
+          <div class="p-4">
+            <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm">
+              <dt class="text-ink-400">Date of birth</dt>
+              <dd class="text-ink-100">{longDate(auth.user()?.dateOfBirth)}</dd>
+              <dt class="text-ink-400">Country</dt>
+              <dd class="text-ink-100">{auth.user()?.country ? countryName(auth.user()!.country!) : '—'}</dd>
+            </dl>
+            <Show when={locked()}>
+              <p class="mt-3 text-xs text-ink-400">These can't be changed while your verification is under review.</p>
+            </Show>
+          </div>
+        }
+      >
+        <form class="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2" onSubmit={save}>
+          <Field label="Date of birth" error={errors().dateOfBirth}>
+            <Input type="date" required value={form().dateOfBirth} onInput={(e) => setForm({ ...form(), dateOfBirth: e.currentTarget.value })} />
+          </Field>
+          <Field label="Country">
+            <Select value={form().country} onChange={(e) => setForm({ ...form(), country: e.currentTarget.value })}>
+              <For each={licensedCountries()}>
+                {(c) => <option value={c} selected={c === form().country}>{countryName(c)}</option>}
+              </For>
+            </Select>
+          </Field>
+          <p class={`text-xs sm:col-span-2 ${props.kycStatus === 'VERIFIED' ? 'text-warn' : 'text-ink-400'}`}>
+            <Show when={props.kycStatus === 'VERIFIED'}>Saving a change removes your verification, so you'll need to verify again. </Show>
+            A verification submitted within 30 days of a change is checked by a person.
+          </p>
+          <div class="flex justify-end gap-2 sm:col-span-2">
+            <Button type="button" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
+            <Button type="submit" loading={busy()}>Save</Button>
+          </div>
+        </form>
+      </Show>
+    </Card>
+  );
+}
+
 function SubmitForm(props: { onDone: () => void }) {
   const [form, setForm] = createSignal({
-    firstName: '', lastName: '', dateOfBirth: '', documentType: 'PASSPORT', documentCountry: 'CZ', documentNumber: '', documentExpiry: '',
+    firstName: '', lastName: '', documentType: 'PASSPORT', documentNumber: '', documentExpiry: '',
   });
   const [errors, setErrors] = createSignal<Record<string, string>>({});
   const [busy, setBusy] = createSignal(false);
@@ -62,21 +150,14 @@ function SubmitForm(props: { onDone: () => void }) {
       <Field label="Last name" error={errors().lastName}>
         <Input required autocomplete="family-name" value={form().lastName} onInput={set('lastName')} />
       </Field>
-      <Field label="Date of birth" error={errors().dateOfBirth} hint="As printed on the document">
-        <Input type="date" required value={form().dateOfBirth} onInput={set('dateOfBirth')} />
-      </Field>
+      <p class="text-xs text-ink-400 sm:col-span-2">
+        Your date of birth and country are taken from your personal details above. The document must be issued by that country.
+      </p>
       <Field label="Document type">
         <Select value={form().documentType} onChange={set('documentType')}>
           <option value="PASSPORT">Passport</option>
           <option value="ID_CARD">National ID card</option>
           <option value="DRIVING_LICENCE">Driving licence</option>
-        </Select>
-      </Field>
-      <Field label="Issuing country">
-        <Select value={form().documentCountry} onChange={set('documentCountry')}>
-          <For each={licensedCountries()}>
-            {(c) => <option value={c} selected={c === form().documentCountry}>{countryName(c)}</option>}
-          </For>
         </Select>
       </Field>
       <Field label="Expiry date" error={errors().documentExpiry}>
@@ -109,9 +190,10 @@ export default function Verification() {
   const queryClient = useQueryClient();
   const kyc = createQuery(() => ({ queryKey: ['kyc'], queryFn: () => get<KycInfo>('/api/kyc') }));
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ['kyc'] });
+  onMount(() => void auth.reloadUser()); // a session stored before the profile had dateOfBirth
   return (
     <div class="mx-auto max-w-3xl">
-      <PageHeader title="Identity verification" subtitle="Verify once to unlock withdrawals and remove the deposit cap." />
+      <PageHeader title="Profile & verification" subtitle="Verify once to unlock withdrawals and remove the deposit cap." />
       <Show when={kyc.data} fallback={<div class="grid place-items-center py-24"><Spinner /></div>}>
         {(info) => (
           <div class="flex flex-col gap-6">
@@ -149,8 +231,9 @@ export default function Verification() {
                 )}
               </Show>
             </Card>
+            <ProfileCard kycStatus={info().status} onChanged={refresh} />
             <Show when={info().status === 'NONE' || info().status === 'REJECTED'}>
-              <Card title="Your details">
+              <Card title="Identity document">
                 <SubmitForm onDone={refresh} />
               </Card>
             </Show>

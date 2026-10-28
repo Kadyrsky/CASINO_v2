@@ -1,5 +1,6 @@
 package win.naebka.kyc;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -11,16 +12,21 @@ public interface KycProvider {
 
     enum Outcome { PASS, REVIEW, FAIL }
 
-    /** What the user submitted. {@code documentNumber} is normalized (upper case, no spaces or dashes). */
+    /**
+     * The person and document being verified. Date of birth and country come from the user's profile (the player
+     * doesn't type them twice); {@code documentNumber} is normalized (upper case, no spaces or dashes).
+     */
     record Applicant(String firstName, String lastName, LocalDate dateOfBirth, String documentType,
                      String documentCountry, String documentNumber, LocalDate documentExpiry) {}
 
-    /** What we already know about the user, to cross-check the submission against. */
-    record Profile(LocalDate dateOfBirth, String country, boolean documentUsedByAnotherUser) {}
+    record ProfileChange(String field, String oldValue, String newValue, Instant changedAt) {}
+
+    /** Risk signals from the account's history. */
+    record History(List<ProfileChange> profileChanges, boolean documentUsedByAnotherUser) {}
 
     record Check(String check, Outcome outcome, String message) {}
 
-    List<Check> verify(Applicant applicant, Profile profile);
+    List<Check> verify(Applicant applicant, History history);
 
     /** FAIL beats REVIEW beats PASS: one hard failure rejects, one doubt sends it to a human. */
     static Outcome overall(List<Check> checks) {

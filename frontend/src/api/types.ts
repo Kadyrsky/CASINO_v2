@@ -114,8 +114,6 @@ export interface KycSubmission {
   reason?: string;
   createdAt: string;
   decidedAt?: string;
-  profileDateOfBirth: string;
-  profileCountry: string;
 }
 
 export interface KycInfo {

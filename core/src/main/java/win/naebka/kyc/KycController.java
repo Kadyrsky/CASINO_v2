@@ -3,7 +3,6 @@ package win.naebka.kyc;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Past;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.time.LocalDate;
@@ -31,9 +30,7 @@ public class KycController {
     public record SubmitRequest(
             @NotBlank @Size(max = 60) @Pattern(regexp = "[\\p{L} .'-]+") String firstName,
             @NotBlank @Size(max = 60) @Pattern(regexp = "[\\p{L} .'-]+") String lastName,
-            @NotNull @Past LocalDate dateOfBirth,
             @NotBlank @Pattern(regexp = "PASSPORT|ID_CARD|DRIVING_LICENCE") String documentType,
-            @NotBlank @Size(min = 2, max = 2) String documentCountry,
             @NotBlank @Pattern(regexp = "[A-Za-z0-9 -]{6,20}") String documentNumber,
             @NotNull LocalDate documentExpiry) {}
 
@@ -47,10 +44,9 @@ public class KycController {
     @PostMapping("/api/kyc/submissions")
     @ResponseStatus(HttpStatus.CREATED)
     public KycService.KycView submit(@Valid @RequestBody SubmitRequest req) {
-        var applicant = new KycProvider.Applicant(req.firstName().trim(), req.lastName().trim(), req.dateOfBirth(),
-                req.documentType(), req.documentCountry().toUpperCase(Locale.ROOT),
+        var document = new KycService.Document(req.firstName().trim(), req.lastName().trim(), req.documentType(),
                 req.documentNumber().replaceAll("[ -]", "").toUpperCase(Locale.ROOT), req.documentExpiry());
-        return kyc.submit(AuthUser.current().id(), applicant);
+        return kyc.submit(AuthUser.current().id(), document);
     }
 
     @GetMapping("/api/admin/kyc/queue")

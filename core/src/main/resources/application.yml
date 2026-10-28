@@ -49,6 +49,8 @@ naebka:
   kyc:
     # Until VERIFIED: no withdrawals, and lifetime deposits (signup bonus excluded) are capped at this.
     unverified-deposit-cap-tokens: 2000
+    # A KYC submission within this many days of a date-of-birth/country change goes to manual review.
+    profile-change-review-days: 30
     # HMAC key for document-number hashes (duplicate detection without storing the number).
     document-hash-key: dev-only-kyc-key-change-me
   auth:

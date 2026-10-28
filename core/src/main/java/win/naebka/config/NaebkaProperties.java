@@ -29,8 +29,8 @@ public record NaebkaProperties(
 
     public record Registration(int minAge, List<String> licensedCountries) {}
 
-    /** Tiered limits for unverified users and the key for hashing document numbers (Risk #5). */
-    public record Kyc(long unverifiedDepositCapTokens, String documentHashKey) {}
+    /** Tiered limits for unverified users, review of recent profile changes, document-number hash key (Risk #5). */
+    public record Kyc(long unverifiedDepositCapTokens, int profileChangeReviewDays, String documentHashKey) {}
 
     public record Auth(int maxFailedLogins, int lockoutMinutes) {}
 

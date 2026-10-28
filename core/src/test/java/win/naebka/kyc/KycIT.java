@@ -22,9 +22,8 @@ class KycIT extends IntegrationTestBase {
     @Autowired
     JdbcClient jdbc;
 
-    // newUser() registers with 1995-05-05 / CZ
-    static KycProvider.Applicant applicant(LocalDate dob, String number) {
-        return new KycProvider.Applicant("Jana", "Novak", dob, "PASSPORT", "CZ", number, LocalDate.now().plusYears(5));
+    static KycService.Document document(String number) {
+        return new KycService.Document("Jana", "Novak", "PASSPORT", number, LocalDate.now().plusYears(5));
     }
 
     /** A unique document number with a valid ICAO check digit. */
@@ -52,14 +51,16 @@ class KycIT extends IntegrationTestBase {
     }
 
     @Test
-    void cleanSubmissionIsVerifiedAutomatically() {
-        UUID user = newUser();
-        var view = kyc.submit(user, applicant(LocalDate.of(1995, 5, 5), freshNumber()));
+    void cleanSubmissionIsVerifiedAutomaticallyFromProfileData() {
+        UUID user = newUser(); // registered 1995-05-05 / CZ
+        var view = kyc.submit(user, document(freshNumber()));
         assertThat(view.status()).isEqualTo("VERIFIED");
         assertThat(view.canWithdraw()).isTrue();
         assertThat(view.latest().decidedBy()).isEqualTo("AUTO");
+        assertThat(view.latest().dateOfBirth()).isEqualTo(LocalDate.of(1995, 5, 5));
+        assertThat(view.latest().documentCountry()).isEqualTo("CZ");
         assertThat(view.latest().documentNumberLast4()).hasSize(4);
-        assertThat(code(() -> kyc.submit(user, applicant(LocalDate.of(1995, 5, 5), freshNumber()))))
+        assertThat(code(() -> kyc.submit(user, document(freshNumber()))))
                 .isEqualTo(ErrorCode.KYC_ALREADY_SUBMITTED.name());
     }
 
@@ -68,22 +69,29 @@ class KycIT extends IntegrationTestBase {
         UUID user = newUser();
         String good = freshNumber();
         String bad = good.substring(0, good.length() - 1) + ((good.charAt(good.length() - 1) - '0' + 1) % 10);
-        var rejected = kyc.submit(user, applicant(LocalDate.of(1995, 5, 5), bad));
+        var rejected = kyc.submit(user, document(bad));
         assertThat(rejected.status()).isEqualTo("REJECTED");
         assertThat(rejected.latest().reason()).contains("check digit");
-        assertThat(kyc.submit(user, applicant(LocalDate.of(1995, 5, 5), good)).status()).isEqualTo("VERIFIED");
+        assertThat(kyc.submit(user, document(good)).status()).isEqualTo("VERIFIED");
     }
 
     @Test
-    void mismatchGoesToTheAdminQueueAndIsAudited() {
+    void recentProfileChangeGoesToTheAdminQueueAndIsAudited() {
         UUID user = newUser();
-        var pending = kyc.submit(user, applicant(LocalDate.of(1995, 5, 6), freshNumber()));
+        auth.updateProfile(user, LocalDate.of(1995, 5, 6), "DE");
+        var pending = kyc.submit(user, document(freshNumber()));
         assertThat(pending.status()).isEqualTo("PENDING");
+        assertThat(pending.latest().reason()).contains("Date of birth changed").contains("CZ → DE");
+        assertThat(pending.latest().documentCountry()).isEqualTo("DE");
         UUID submission = pending.latest().id();
         assertThat(kyc.reviewQueue()).extracting(KycRepository.Submission::id).contains(submission);
 
+        // the reviewer is looking at these values: no changes until it's decided
+        assertThat(code(() -> auth.updateProfile(user, LocalDate.of(1995, 5, 5), "DE")))
+                .isEqualTo(ErrorCode.PROFILE_CHANGE_BLOCKED.name());
+
         UUID admin = admin();
-        kyc.reject(submission, admin, "Date of birth does not match");
+        kyc.reject(submission, admin, "Date of birth does not match the document");
         assertThat(kyc.view(user).status()).isEqualTo("REJECTED");
         assertThat(code(() -> kyc.approve(submission, admin))).isEqualTo(ErrorCode.KYC_NOT_PENDING.name());
         long audited = jdbc.sql("SELECT count(*) FROM admin_audit_log WHERE action = 'KYC_REJECTED' AND target = ?")
@@ -92,11 +100,29 @@ class KycIT extends IntegrationTestBase {
     }
 
     @Test
+    void changingProfileEndsAVerification() {
+        UUID user = newUser();
+        kyc.submit(user, document(freshNumber()));
+        assertThat(kyc.view(user).status()).isEqualTo("VERIFIED");
+
+        auth.updateProfile(user, LocalDate.of(1995, 5, 5), "CZ"); // no change: stays verified
+        assertThat(kyc.view(user).status()).isEqualTo("VERIFIED");
+
+        auth.updateProfile(user, LocalDate.of(1995, 5, 5), "SK");
+        assertThat(kyc.view(user).status()).isEqualTo("NONE");
+        assertThat(kyc.view(user).canWithdraw()).isFalse();
+        assertThat(code(() -> auth.updateProfile(user, LocalDate.now().minusYears(17), "SK")))
+                .isEqualTo(ErrorCode.UNDERAGE.name());
+        assertThat(code(() -> auth.updateProfile(user, LocalDate.of(1995, 5, 5), "US")))
+                .isEqualTo(ErrorCode.COUNTRY_NOT_LICENSED.name());
+    }
+
+    @Test
     void reusedDocumentIsFlaggedThenApproved() {
         String number = freshNumber();
-        kyc.submit(newUser(), applicant(LocalDate.of(1995, 5, 5), number));
+        kyc.submit(newUser(), document(number));
         UUID second = newUser();
-        var pending = kyc.submit(second, applicant(LocalDate.of(1995, 5, 5), number));
+        var pending = kyc.submit(second, document(number));
         assertThat(pending.status()).isEqualTo("PENDING");
         assertThat(pending.latest().reason()).contains("another account");
         kyc.approve(pending.latest().id(), admin());
@@ -118,7 +144,7 @@ class KycIT extends IntegrationTestBase {
             return null;
         }))).isEqualTo(ErrorCode.KYC_REQUIRED.name());
 
-        kyc.submit(user, applicant(LocalDate.of(1995, 5, 5), freshNumber()));
+        kyc.submit(user, document(freshNumber()));
         kyc.assertCanWithdraw(user);
         tx.inTransaction(() -> {
             kyc.assertCanDeposit(user, 1_000_000_00);

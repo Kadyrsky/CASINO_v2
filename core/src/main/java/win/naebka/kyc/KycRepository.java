@@ -18,17 +18,16 @@ public class KycRepository {
         this.jdbc = jdbc;
     }
 
-    /** A submission plus the registration data it was checked against (what the reviewer compares). */
+    /** Date of birth and country are the profile values at the time of submission. */
     public record Submission(UUID id, UUID userId, String username, String firstName, String lastName,
                              LocalDate dateOfBirth, String documentType, String documentCountry,
                              String documentNumberLast4, LocalDate documentExpiry, String status, String decidedBy,
-                             JsonNode checks, String reason, Instant createdAt, Instant decidedAt,
-                             LocalDate profileDateOfBirth, String profileCountry) {}
+                             JsonNode checks, String reason, Instant createdAt, Instant decidedAt) {}
 
     private static final String SELECT = """
             SELECT k.id, k.user_id, u.username, k.first_name, k.last_name, k.date_of_birth, k.document_type,
                    k.document_country, k.document_number_last4, k.document_expiry, k.status, k.decided_by, k.checks,
-                   k.reason, k.created_at, k.decided_at, u.date_of_birth AS profile_dob, u.country AS profile_country
+                   k.reason, k.created_at, k.decided_at
             FROM kyc_submissions k JOIN users u ON u.id = k.user_id""";
 
     private static Submission map(java.sql.ResultSet rs, int i) throws java.sql.SQLException {
@@ -39,8 +38,7 @@ public class KycRepository {
                 rs.getString("document_country"), rs.getString("document_number_last4"),
                 rs.getDate("document_expiry").toLocalDate(), rs.getString("status"), rs.getString("decided_by"),
                 Json.read(rs.getString("checks")), rs.getString("reason"), rs.getTimestamp("created_at").toInstant(),
-                decidedAt == null ? null : decidedAt.toInstant(), rs.getDate("profile_dob").toLocalDate(),
-                rs.getString("profile_country"));
+                decidedAt == null ? null : decidedAt.toInstant());
     }
 
     /** Locks the user row, so a user's KYC submissions, decisions and capped deposits are serialized. */

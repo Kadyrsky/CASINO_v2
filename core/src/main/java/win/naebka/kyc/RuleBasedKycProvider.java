@@ -1,8 +1,11 @@
 package win.naebka.kyc;
 
 import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.Period;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -12,28 +15,32 @@ import org.springframework.stereotype.Component;
 import win.naebka.config.NaebkaProperties;
 
 /**
- * Automatic KYC checks without an external vendor. Hard rule violations FAIL (auto-reject), mismatches against the
- * registration profile ask for REVIEW (admin queue), and a clean result is auto-approved.
+ * Automatic KYC checks without an external vendor. Hard rule violations FAIL (auto-reject), fraud signals (a recent
+ * date-of-birth/country change, a document reused across accounts) ask for REVIEW (admin queue), and a clean result
+ * is auto-approved.
  */
 @Component
 public class RuleBasedKycProvider implements KycProvider {
     private final int minAge;
     private final Set<String> licensedCountries;
+    private final Duration profileChangeWindow;
     private final Clock clock;
 
     @Autowired
     public RuleBasedKycProvider(NaebkaProperties props) {
-        this(props.registration().minAge(), props.registration().licensedCountries(), Clock.systemUTC());
+        this(props.registration().minAge(), props.registration().licensedCountries(),
+                props.kyc().profileChangeReviewDays(), Clock.systemUTC());
     }
 
-    RuleBasedKycProvider(int minAge, Collection<String> licensedCountries, Clock clock) {
+    RuleBasedKycProvider(int minAge, Collection<String> licensedCountries, int profileChangeReviewDays, Clock clock) {
         this.minAge = minAge;
         this.licensedCountries = Set.copyOf(licensedCountries);
+        this.profileChangeWindow = Duration.ofDays(profileChangeReviewDays);
         this.clock = clock;
     }
 
     @Override
-    public List<Check> verify(Applicant a, Profile p) {
+    public List<Check> verify(Applicant a, History h) {
         LocalDate today = LocalDate.now(clock);
         List<Check> out = new ArrayList<>();
 
@@ -51,13 +58,16 @@ public class RuleBasedKycProvider implements KycProvider {
                 ? pass("DOCUMENT_CHECK_DIGIT", "Check digit matches")
                 : fail("DOCUMENT_CHECK_DIGIT", "Document number check digit does not match"));
 
-        out.add(a.dateOfBirth().equals(p.dateOfBirth())
-                ? pass("BIRTH_DATE_MATCHES_PROFILE", "Matches registration")
-                : review("BIRTH_DATE_MATCHES_PROFILE", "Date of birth differs from registration (" + p.dateOfBirth() + ")"));
-        out.add(a.documentCountry().equals(p.country())
-                ? pass("COUNTRY_MATCHES_PROFILE", "Matches registration")
-                : review("COUNTRY_MATCHES_PROFILE", "Document country differs from registration (" + p.country() + ")"));
-        out.add(!p.documentUsedByAnotherUser()
+        Instant windowStart = clock.instant().minus(profileChangeWindow);
+        List<String> recent = h.profileChanges().stream().filter(c -> c.changedAt().isAfter(windowStart))
+                .map(c -> humanField(c.field()) + " changed on " + LocalDate.ofInstant(c.changedAt(), ZoneOffset.UTC)
+                        + " (" + c.oldValue() + " → " + c.newValue() + ")")
+                .toList();
+        out.add(recent.isEmpty()
+                ? pass("RECENT_PROFILE_CHANGE", "No date of birth or country change in the last "
+                        + profileChangeWindow.toDays() + " days")
+                : review("RECENT_PROFILE_CHANGE", String.join("; ", recent)));
+        out.add(!h.documentUsedByAnotherUser()
                 ? pass("DUPLICATE_DOCUMENT", "Document not used by another account")
                 : review("DUPLICATE_DOCUMENT", "Document is already linked to another account"));
         return out;
@@ -84,6 +94,10 @@ public class RuleBasedKycProvider implements KycProvider {
             sum += value * weights[i % 3];
         }
         return sum % 10;
+    }
+
+    private static String humanField(String field) {
+        return "date_of_birth".equals(field) ? "Date of birth" : "Country";
     }
 
     private static Check pass(String check, String message) {
