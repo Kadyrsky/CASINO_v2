@@ -13,6 +13,7 @@ public record NaebkaProperties(
         Jwt jwt,
         Admin admin,
         Registration registration,
+        Kyc kyc,
         Auth auth,
         Wallet wallet,
         Betting betting,
@@ -27,6 +28,9 @@ public record NaebkaProperties(
     public record Admin(String username, String password) {}
 
     public record Registration(int minAge, List<String> licensedCountries) {}
+
+    /** Tiered limits for unverified users and the key for hashing document numbers (Risk #5). */
+    public record Kyc(long unverifiedDepositCapTokens, String documentHashKey) {}
 
     public record Auth(int maxFailedLogins, int lockoutMinutes) {}
 

@@ -1,13 +1,15 @@
-import { useNavigate } from '@solidjs/router';
+import { A, useNavigate } from '@solidjs/router';
 import { createInfiniteQuery, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { createSignal, For, onMount, Show } from 'solid-js';
 import { ApiError, del, get, newIdempotencyKey, post, put } from '../api/client';
-import type { Limit, Page, SessionInfo, Transaction, Wallet } from '../api/types';
+import type { KycInfo, Limit, Page, SessionInfo, Transaction, Wallet } from '../api/types';
+import { KYC_LABEL, KYC_TONE } from '../components/kyc';
 import { toast } from '../components/toast';
 import { Badge, Button, Card, Empty, Field, Input, Modal, PageHeader, Select, Spinner, Stat } from '../components/ui';
 import { auth } from '../lib/auth';
 import { ago, appConfig, dateTime, fiat, humanize, tokens } from '../lib/format';
 import { wallet } from '../lib/wallet';
+
 
 function MoneyForm(props: { kind: 'deposit' | 'withdrawal' }) {
   const queryClient = useQueryClient();
@@ -23,6 +25,7 @@ function MoneyForm(props: { kind: 'deposit' | 'withdrawal' }) {
       key = newIdempotencyKey();
       void queryClient.invalidateQueries({ queryKey: ['transactions'] });
       void queryClient.invalidateQueries({ queryKey: ['limits'] });
+      void queryClient.invalidateQueries({ queryKey: ['kyc'] });
     } catch (err) {
       if (!(err instanceof ApiError) || err.status !== 0) key = newIdempotencyKey(); // keep the key only to retry a network failure
       toast.error(err);
@@ -39,6 +42,32 @@ function MoneyForm(props: { kind: 'deposit' | 'withdrawal' }) {
         {props.kind === 'deposit' ? 'Add tokens' : 'Withdraw'}
       </Button>
     </form>
+  );
+}
+
+/** Tiered limits: what the current verification level allows. */
+function KycBanner() {
+  const kyc = createQuery(() => ({ queryKey: ['kyc'], queryFn: () => get<KycInfo>('/api/kyc') }));
+  return (
+    <Show when={kyc.data}>
+      {(info) => (
+        <div class="mt-5 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-ink-850 px-3 py-2.5 text-sm">
+          <div class="flex items-center gap-2">
+            <Badge tone={KYC_TONE[info().status]}>{KYC_LABEL[info().status]}</Badge>
+            <span class="text-ink-400">
+              <Show when={info().status !== 'VERIFIED'} fallback="Withdrawals unlocked, no deposit cap.">
+                Withdrawals locked · deposits {tokens(info().depositedTokens)} / {tokens(info().depositCapTokens)} NTK
+              </Show>
+            </span>
+          </div>
+          <Show when={info().status !== 'VERIFIED'}>
+            <A href="/verification" class="font-semibold text-gold-300 hover:underline">
+              {info().status === 'PENDING' ? 'View status' : 'Verify now'} →
+            </A>
+          </Show>
+        </div>
+      )}
+    </Show>
   );
 }
 
@@ -266,6 +295,7 @@ export default function WalletPage() {
               <MoneyForm kind="deposit" />
               <MoneyForm kind="withdrawal" />
             </div>
+            <KycBanner />
           </Card>
           <Limits />
           <SelfExclusion />

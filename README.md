@@ -15,6 +15,7 @@ docker compose up --build
 ```
 
 Open <http://localhost:8080>, register (18+, licensed country), and you start with 1,000 NTK.
+To withdraw, verify your identity under **Verify identity** in the account menu (see [KYC](#kyc)).
 Live matches appear within ~10 s: the watcher picks fresh ranked games from `api.deadlock-api.com`.
 
 | Service | Port (host) | What it is |
@@ -66,12 +67,43 @@ flowchart LR
 7. **Watchdogs**: no watcher data for 60 s → STALE and suspended. Stale for 20 min → ended and settled from the
    report.
 
+## KYC
+
+Hybrid identity verification (Risk #5, "AML/KYC program absent"): automatic rules decide the clear cases, and
+anything ambiguous goes to a person.
+
+1. The player submits name, date of birth, document type, issuing country, document number and expiry
+   (`POST /api/kyc/submissions`, page `/verification`).
+2. `RuleBasedKycProvider` runs the checks. It sits behind the `KycProvider` interface, so a real vendor could be
+   swapped in later (Strategy pattern).
+
+   | Check | If it fails |
+   |---|---|
+   | Age ≥ 18, issuing country licensed, document not expired | **FAIL**: auto-rejected, the player can fix it and resubmit |
+   | Document number check digit (ICAO 9303: weights 7-3-1, mod 10) | **FAIL** |
+   | Date of birth / country match registration | **REVIEW**: goes to the admin KYC queue |
+   | Document already used by another account | **REVIEW** |
+
+3. Any FAIL → `REJECTED`; otherwise any REVIEW → `PENDING` (admin approves or rejects at `/admin`, which is
+   written to `admin_audit_log`); otherwise → `VERIFIED` automatically.
+
+**Tiered limits** until `VERIFIED`: withdrawals return `403 KYC_REQUIRED`, and lifetime deposits (the signup bonus
+doesn't count) are capped at `naebka.kyc.unverified-deposit-cap-tokens` (2,000 NTK).
+
+**Data minimisation:** the document number is never stored. Only the last 4 characters and an HMAC (for
+duplicate detection) are kept. On the form, **Use a test number** generates a number with a valid check digit, so
+the demo never needs a real document.
+
+Licensed countries (`naebka.registration.licensed-countries`): United Kingdom, Malta, Sweden, Denmark, Czech
+Republic, Netherlands, Croatia, Estonia, Italy, Latvia, Switzerland, Romania, Spain, Lithuania, North Macedonia,
+Germany, Hungary, Montenegro, Slovenia, Portugal, Belgium, Ireland, Bulgaria, Greece, Serbia, Slovakia.
+
 ## Tests
 
 ```bash
-# Java: 41 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money)
+# Java: 46 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules)
 cd core && mvn test
-# + 14 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
+# + 20 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
 cd core && mvn -Pit test
 
 # Python: 21 tests, mypy --strict
@@ -90,6 +122,9 @@ settle" via the scripted `MatchSimulator`):
 * Stream/report disagreement → `REVIEW`; void → stakes refunded.
 * 40 concurrent debits on one wallet → exactly 20 succeed, balance never negative, ledger sum = balance.
 * Idempotency keys move money once; the ledger rejects `UPDATE`/`DELETE`.
+* KYC: a clean submission is auto-verified, a bad check digit is auto-rejected and can be resubmitted, mismatches
+  and reused documents go to review, admin decisions are audited, unverified users can't withdraw and hit the
+  deposit cap.
 * HTTP: RFC 7807 errors, logout revokes the JWT, slot spin is verifiable after seed rotation, poker buy-in/cash-out.
 
 ## Where each design document lives in the code
@@ -109,6 +144,7 @@ settle" via the scripted `MatchSimulator`):
 | Hole-card masking, same-IP restriction (LLD §2.1) | `PokerTable.publicState()` / `privateState()`, `PokerService.sit()` |
 | WebSocket `{topic, seq, ts, data}` with `lastSeq` resume | `ws/WsHub.java`, `ws/NaebkaWebSocketHandler.java`, `frontend/src/lib/ws.ts` |
 | Responsible gambling (Risk #4) | `wallet/ResponsibleGamingService.java`: deposit/wager/loss limits, 24 h cooling-off on increases, self-exclusion |
+| KYC: hybrid auto + manual verification, tiered limits (Risk #5) | `kyc/*`, `db/migration/V3__kyc.sql`, `frontend/src/pages/Verification.tsx`, KYC queue in `/admin` |
 | CURRENCY_MODE compliance gate (Risk #13) | `config/CurrencyModeGuard.java`: REAL_MONEY refuses to start without the license sign-off file |
 | Frontend stack (Vite+, SolidJS, TS, Tailwind, TanStack, openapi-typescript, component registry) | `frontend/`; API types generated into `src/api/schema.d.ts` (`npm run gen:api`), shared components in `src/components/ui.tsx` |
 
@@ -131,7 +167,8 @@ Where the documents disagreed or left things open, this is what was built and wh
 
 ## Known gaps (not built)
 
-* Real-money rails (PSP, KYC/AML, geo-IP checks, withdrawal review queue) — the compliance gate blocks REAL_MONEY.
+* Real-money rails (PSP, real KYC vendor and document-photo checks, AML transaction monitoring, geo-IP checks,
+  withdrawal review queue) — the compliance gate blocks REAL_MONEY.
 * Steam OpenID, 2FA, insider-betting cross-check.
 * Reality-check reminders, first-withdrawal delay, chargeback / negative-balance policy (Risk #12).
 * Kubernetes deployment, load tests, SonarQube/CI pipeline.

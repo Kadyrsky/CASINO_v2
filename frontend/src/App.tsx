@@ -15,6 +15,7 @@ const Slots = lazy(() => import('./pages/Slots'));
 const PokerLobby = lazy(() => import('./pages/PokerLobby'));
 const PokerTablePage = lazy(() => import('./pages/PokerTable'));
 const Admin = lazy(() => import('./pages/Admin'));
+const Verification = lazy(() => import('./pages/Verification'));
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 5_000, retry: 1, refetchOnWindowFocus: false } },
@@ -30,6 +31,7 @@ export default function App() {
         <Route path="/matches/:id" component={MatchPage} />
         <Route path="/bets" component={() => <RequireAuth><Bets /></RequireAuth>} />
         <Route path="/wallet" component={() => <RequireAuth><WalletPage /></RequireAuth>} />
+        <Route path="/verification" component={() => <RequireAuth><Verification /></RequireAuth>} />
         <Route path="/slots" component={Slots} />
         <Route path="/poker" component={PokerLobby} />
         <Route path="/poker/:id" component={PokerTablePage} />

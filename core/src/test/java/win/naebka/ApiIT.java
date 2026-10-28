@@ -66,6 +66,15 @@ class ApiIT extends IntegrationTestBase {
     }
 
     @Test
+    void withdrawalNeedsVerifiedIdentity() {
+        String t = login();
+        var res = call(HttpMethod.POST, "/api/wallet/withdrawals", Map.of("amountTokens", 10), t);
+        assertThat(res.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(json(res).path("code").asText()).isEqualTo("KYC_REQUIRED");
+        assertThat(json(call(HttpMethod.GET, "/api/kyc", null, t)).path("status").asText()).isEqualTo("NONE");
+    }
+
+    @Test
     void depositWithoutIdempotencyKeyIsRejected() {
         String t = login();
         HttpHeaders h = new HttpHeaders();
