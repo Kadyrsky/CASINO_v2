@@ -19,6 +19,11 @@ spring:
   mvc:
     problemdetails:
       enabled: true
+  # Several threads, so a slow match-result request in settlement can't delay the STALE watchdog.
+  task:
+    scheduling:
+      pool:
+        size: 4
   jackson:
     default-property-inclusion: non_null
 
@@ -44,7 +49,15 @@ naebka:
     password: admin12345
   registration:
     min-age: 18
-    licensed-countries: [CZ, SK, DE, AT, PL, GB, IE, NL, EE, LV, LT, FI, SE, DK, MT, CY]
+    # ISO 3166-1 alpha-2 (United Kingdom = GB, Greece = GR, North Macedonia = MK, Montenegro = ME).
+    licensed-countries: [GB, MT, SE, DK, CZ, NL, HR, EE, IT, LV, CH, RO, ES, LT, MK, DE, HU, ME, SI, PT, BE, IE, BG, GR, RS, SK]
+  kyc:
+    # Until VERIFIED: no withdrawals, and lifetime deposits (signup bonus excluded) are capped at this.
+    unverified-deposit-cap-tokens: 2000
+    # A KYC submission within this many days of a date-of-birth/country change goes to manual review.
+    profile-change-review-days: 30
+    # HMAC key for document-number hashes (duplicate detection without storing the number).
+    document-hash-key: dev-only-kyc-key-change-me
   auth:
     max-failed-logins: 5
     lockout-minutes: 15
@@ -77,3 +90,41 @@ naebka:
   deadlock-api:
     base-url: https://api.deadlock-api.com
     timeout-seconds: 10
+  # The team's Steam bot (deadlock-bot/, `serve` mode). Asked for match results only when deadlock-api refuses
+  # ("too many requests") or is down. Empty base-url = off.
+  deadlock-bot:
+    base-url: ""
+    token: ""
+    # Covers a Steam login when the bot's session is closed.
+    timeout-seconds: 30
+  # Realtime map (deadlock-bot follows the broadcasts). Admins and premium players may always watch; others need this
+  # many tokens staked on the match (0 = any logged-in player). Frames reach viewers delay-seconds after the core gets
+  # them, so markets suspend first.
+  live-view:
+    min-stake-tokens: 100
+    delay-seconds: 5
+  # MetaMask + Sepolia deposits (course web3 lab). Sepolia ETH is test money, so this stays PLAY_MONEY.
+  eth:
+    chain-id: 11155111
+    rpc-url: https://ethereum-sepolia-rpc.publicnode.com
+    # Empty = feature off. Set NAEBKA_ETH_CONTRACT_ADDRESS to the NaebkaCashier address deployed from Remix.
+    contract-address: ""
+    # Block the contract was deployed in (Etherscan shows it). 0 = start near the current block.
+    deploy-block: 0
+    # Blocks to wait before crediting: inclusion in one block is not finality.
+    confirmations: 3
+    poll-seconds: 15
+    # Blocks per eth_getLogs call; public RPCs reject large ranges.
+    max-block-range: 500
+    # 0.001 Sepolia ETH = 100 NTK
+    tokens-per-eth: 100000
+    # Must match the address players open, or MetaMask warns about the sign-in message.
+    siwe-domain: localhost:8080
+    siwe-uri: http://localhost:8080
+    link-message-ttl-seconds: 300
+    # Withdrawals to MetaMask: private key (0x + 64 hex) of the contract's operator account, a Sepolia test account
+    # that only pays gas. Empty = withdrawals off. Never use a key that holds real money.
+    operator-key: ""
+    # A payout never pays more than this per gas unit (Sepolia is usually far below it); above it, payouts wait.
+    max-fee-gwei: 50
+    payout-gas-limit: 150000
