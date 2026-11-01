@@ -1,0 +1,32 @@
+{
+  "name": "naebka-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "build": "vp build",
+    "preview": "vp preview",
+    "check": "vp check",
+    "test": "vp test",
+    "typecheck": "tsc --noEmit",
+    "gen:api": "openapi-typescript http://localhost:8081/api/openapi.json -o src/api/schema.d.ts"
+  },
+  "dependencies": {
+    "@solidjs/router": "^0.15.3",
+    "@tanstack/solid-query": "^5.104.5",
+    "solid-js": "^1.9.17"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "openapi-typescript": "^7.13.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.4.0",
+    "vite-plugin-solid": "^2.11.14",
+    "vite-plus": "1.4.0"
+  },
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.4.0"
+  }
+}
