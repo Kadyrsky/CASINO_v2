@@ -19,17 +19,36 @@ import win.naebka.common.Json;
 import win.naebka.config.NaebkaProperties;
 
 /**
- * Minimal Ethereum JSON-RPC client (eth_blockNumber, eth_chainId, eth_getLogs) over java.net.http.
- * The browser talks to the chain through MetaMask; only the deposit poller uses this.
+ * Minimal Ethereum JSON-RPC client over java.net.http. The browser talks to the chain through MetaMask; the deposit
+ * poller reads logs with this, and the payout sender sends the operator's signed payout transactions.
  */
 @Component
 public class EthRpcClient {
     /** One Deposited event from NaebkaCashier. */
     public record ChainDeposit(String txHash, int logIndex, long blockNumber, String from, BigInteger amountWei) {}
 
+    /** A mined transaction: {@code success} is false when it reverted. */
+    public record Receipt(boolean success, long blockNumber) {}
+
+    /** The node could not be reached or answered badly. Whatever was sent may or may not have arrived. */
     public static class RpcException extends RuntimeException {
         public RpcException(String message) {
             super(message);
+        }
+    }
+
+    /** The node answered with a JSON-RPC error: it refused the request (for a call or estimate, often a revert). */
+    public static class RpcRejected extends RpcException {
+        private final String data;
+
+        public RpcRejected(String message, String data) {
+            super(message);
+            this.data = data;
+        }
+
+        /** Revert data (an error selector) when the node sent it, else null. */
+        public String data() {
+            return data;
         }
     }
 
@@ -47,6 +66,54 @@ public class EthRpcClient {
 
     public long chainId() {
         return Numeric.decodeQuantity(call("eth_chainId", List.of()).asText()).longValueExact();
+    }
+
+    /** The account's next nonce, counting transactions still waiting in the node's pool. */
+    public BigInteger pendingNonce(String address) {
+        return Numeric.decodeQuantity(call("eth_getTransactionCount", List.of(address, "pending")).asText());
+    }
+
+    public BigInteger balance(String address) {
+        return Numeric.decodeQuantity(call("eth_getBalance", List.of(address, "latest")).asText());
+    }
+
+    /** Base fee of the latest block (EIP-1559). */
+    public BigInteger baseFee() {
+        JsonNode block = call("eth_getBlockByNumber", List.of("latest", false));
+        String fee = block.path("baseFeePerGas").asText("");
+        if (fee.isEmpty()) {
+            throw new RpcException("latest block has no baseFeePerGas");
+        }
+        return Numeric.decodeQuantity(fee);
+    }
+
+    public BigInteger maxPriorityFee() {
+        return Numeric.decodeQuantity(call("eth_maxPriorityFeePerGas", List.of()).asText());
+    }
+
+    /** Gas the call would use. Throws {@link RpcRejected} (with the revert data) when it would revert. */
+    public BigInteger estimateGas(String from, String to, String data) {
+        return Numeric.decodeQuantity(call("eth_estimateGas", List.of(Map.of("from", from, "to", to, "data", data))).asText());
+    }
+
+    /** Read-only contract call at the latest block; returns the raw hex result. */
+    public String ethCall(String to, String data) {
+        return call("eth_call", List.of(Map.of("to", to, "data", data), "latest")).asText();
+    }
+
+    /** Broadcasts a signed transaction; returns its hash. */
+    public String sendRawTransaction(String rawHex) {
+        return call("eth_sendRawTransaction", List.of(rawHex)).asText().toLowerCase(Locale.ROOT);
+    }
+
+    /** Empty while the transaction is not mined (or unknown to the node). */
+    public java.util.Optional<Receipt> receipt(String txHash) {
+        JsonNode r = call("eth_getTransactionReceipt", List.of(txHash));
+        if (r == null || r.isNull() || r.isMissingNode()) {
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(new Receipt("0x1".equals(r.path("status").asText()),
+                Numeric.decodeQuantity(r.path("blockNumber").asText()).longValueExact()));
     }
 
     public List<ChainDeposit> depositLogs(String contract, long fromBlock, long toBlock) {
@@ -109,7 +176,9 @@ public class EthRpcClient {
         }
         JsonNode node = Json.read(res.body());
         if (node.hasNonNull("error")) {
-            throw new RpcException(method + ": " + node.path("error").path("message").asText("RPC error"));
+            JsonNode error = node.path("error");
+            String data = error.path("data").isTextual() ? error.path("data").asText() : null;
+            throw new RpcRejected(method + ": " + error.path("message").asText("RPC error"), data);
         }
         return node.path("result");
     }

@@ -1,11 +1,12 @@
 /**
  * Wallet-page card for MetaMask + Sepolia: connect (lab module 04), link the address by signing a message,
- * deposit test ETH (lab module 05). Tokens are credited by the core once the deposit is a few blocks deep.
+ * deposit test ETH (lab module 05), and withdraw back to the linked address. Tokens are credited by the core once a
+ * deposit is a few blocks deep; a withdrawal takes the tokens at once and the server pays the ETH from the contract.
  */
 import { createQuery, useQueryClient } from '@tanstack/solid-query';
 import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
-import { del, get, post } from '../api/client';
-import type { EthStatus } from '../api/types';
+import { del, get, newIdempotencyKey, post } from '../api/client';
+import type { EthStatus, EthWithdrawal } from '../api/types';
 import { eth, etherscanAddress, etherscanTx, explainEthError, shortAddress } from '../lib/eth';
 import { ago, tokens } from '../lib/format';
 import { toast } from './toast';
@@ -20,6 +21,15 @@ const NOTICE_CLASS: Record<Notice['kind'], string> = {
 };
 
 const STATUS_TONE = { credited: 'win', unlinked: 'warn', held: 'warn' } as const;
+const WITHDRAWAL_TONE = { pending: 'blue', sent: 'blue', confirmed: 'win', failed: 'loss', review: 'warn' } as const;
+const WITHDRAWAL_LABEL: Record<EthWithdrawal['status'], string> = {
+  pending: 'queued',
+  sent: 'on its way',
+  confirmed: 'paid',
+  failed: 'refunded',
+  review: 'checking',
+};
+const isOpen = (w: EthWithdrawal) => w.status === 'pending' || w.status === 'sent';
 
 export function EthWallet() {
   const queryClient = useQueryClient();
@@ -27,13 +37,18 @@ export function EthWallet() {
   const status = createQuery(() => ({
     queryKey: ['eth'],
     queryFn: () => get<EthStatus>('/api/wallet/eth'),
-    refetchInterval: waitingFor() ? 5_000 : false,
+    // Poll while a deposit is on its way or a withdrawal is not paid yet.
+    refetchInterval: (query: { state: { data?: EthStatus } }) =>
+      waitingFor() || query.state.data?.withdrawals.some(isOpen) ? 5_000 : false,
   }));
   const [busy, setBusy] = createSignal(false);
   const [notice, setNotice] = createSignal<Notice | null>(null);
   const [txHash, setTxHash] = createSignal<string | null>(null);
   const [amount, setAmount] = createSignal('0.001');
   const [limits, setLimits] = createSignal<{ min: string; max: string } | null>(null);
+  const [withdrawTokens, setWithdrawTokens] = createSignal('100');
+  // One key per withdrawal attempt, so a retry after a network error can't take the tokens twice.
+  let withdrawKey = newIdempotencyKey();
 
   onCleanup(
     eth.onChange(() => {
@@ -77,6 +92,11 @@ export function EthWallet() {
   const previewTokens = () => {
     const n = Number(amount());
     return Number.isFinite(n) && n > 0 ? n * (status.data?.tokensPerEth ?? 0) : 0;
+  };
+  const previewEth = () => {
+    const n = Number(withdrawTokens());
+    const rate = status.data?.tokensPerEth ?? 0;
+    return Number.isFinite(n) && n > 0 && rate > 0 ? String(Number((n / rate).toFixed(8))) : '0';
   };
 
   const connect = () =>
@@ -127,6 +147,21 @@ export function EthWallet() {
       setWaitingFor(txHash());
       setNotice({
         text: `Included in a block. Tokens arrive after ${status.data?.confirmations ?? 3} confirmations (about a minute).`,
+        kind: 'success',
+      });
+    });
+  };
+
+  const withdraw = (e: Event) => {
+    e.preventDefault();
+    void run(async () => {
+      const w = await post<EthWithdrawal>('/api/wallet/eth/withdrawals', { amountTokens: Number(withdrawTokens()) }, withdrawKey);
+      withdrawKey = newIdempotencyKey();
+      void queryClient.invalidateQueries({ queryKey: ['eth'] });
+      void queryClient.invalidateQueries({ queryKey: ['transactions'] });
+      void queryClient.invalidateQueries({ queryKey: ['wallet'] });
+      setNotice({
+        text: `${tokens(w.amountTokens)} NTK taken from your balance. ${w.amountEth} ETH is on its way to ${shortAddress(w.toAddress)}.`,
         kind: 'success',
       });
     });
@@ -214,6 +249,30 @@ export function EthWallet() {
               </form>
             </Show>
 
+            <Show when={status.data?.withdrawalsEnabled && linked()}>
+              <form class="flex items-end gap-2" onSubmit={withdraw}>
+                <Field
+                  label="Withdraw to MetaMask (NTK)"
+                  class="flex-1"
+                  hint={
+                    <>
+                      = {previewEth()} ETH to {shortAddress(linked())} · {tokens(status.data?.withdrawMinTokens)}–
+                      {tokens(status.data?.withdrawMaxTokens)} NTK · needs a verified identity
+                    </>
+                  }
+                >
+                  <Input
+                    type="text"
+                    inputmode="decimal"
+                    required
+                    value={withdrawTokens()}
+                    onInput={(ev) => setWithdrawTokens(ev.currentTarget.value)}
+                  />
+                </Field>
+                <Button type="submit" variant="secondary" loading={busy()}>Withdraw</Button>
+              </form>
+            </Show>
+
             <Show when={notice()}>
               {(n) => <p class={NOTICE_CLASS[n().kind]} role="status">{n().text}</p>}
             </Show>
@@ -244,6 +303,36 @@ export function EthWallet() {
                           <span class="tabular text-win">+{tokens(d.amountTokens)} NTK</span>
                         </Show>
                         <Badge tone={STATUS_TONE[d.status]}>{d.status}</Badge>
+                      </div>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </Show>
+
+            <Show when={status.data?.withdrawals.length}>
+              <ul class="divide-y divide-ink-800 rounded-lg bg-ink-850" aria-label="Withdrawals">
+                <For each={status.data?.withdrawals}>
+                  {(w) => (
+                    <li class="flex items-center justify-between gap-3 px-3 py-2">
+                      <div class="min-w-0">
+                        <Show when={w.txHash} fallback={<span class="tabular font-medium">{w.amountEth} ETH</span>}>
+                          {(hash) => (
+                            <a class="tabular font-medium hover:underline" href={etherscanTx(hash())} target="_blank" rel="noreferrer">
+                              {w.amountEth} ETH
+                            </a>
+                          )}
+                        </Show>
+                        <p class="truncate text-xs text-ink-400" title={w.error ?? ''}>
+                          {ago(w.createdAt)} · to {shortAddress(w.toAddress)}
+                          <Show when={w.error}> · {w.error}</Show>
+                        </p>
+                      </div>
+                      <div class="flex shrink-0 items-center gap-2">
+                        <span class={`tabular ${w.status === 'failed' ? 'text-ink-400 line-through' : 'text-loss'}`}>
+                          −{tokens(w.amountTokens)} NTK
+                        </span>
+                        <Badge tone={WITHDRAWAL_TONE[w.status]} pulse={isOpen(w)}>{WITHDRAWAL_LABEL[w.status]}</Badge>
                       </div>
                     </li>
                   )}

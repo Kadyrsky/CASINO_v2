@@ -13,15 +13,24 @@ const loadEthers = () => import('ethers');
 export const SEPOLIA_CHAIN_ID = 11155111n;
 const SEPOLIA_HEX = '0xaa36a7';
 
-/** Human-readable ABI of contracts/NaebkaCashier.sol (only what the frontend calls). */
+/**
+ * Human-readable ABI of contracts/src/NaebkaCashier.sol: what the frontend calls, plus every custom error so ethers
+ * can name a revert. Withdrawals are paid by the server (payout() with the operator key), not from the browser.
+ */
 export const CASHIER_ABI = [
   'function deposit() payable',
   'function owner() view returns (address)',
+  'function paused() view returns (bool)',
   'function MIN_DEPOSIT() view returns (uint256)',
   'function MAX_DEPOSIT() view returns (uint256)',
   'error OnlyOwner()',
+  'error OnlyOperator()',
+  'error NotPendingOwner()',
   'error AmountOutOfRange()',
   'error AlreadyPaid()',
+  'error DailyLimitReached()',
+  'error IsPaused()',
+  'error ZeroAddress()',
   'error TransferFailed()',
   'event Deposited(address indexed player, uint256 amount)',
 ];
@@ -65,6 +74,7 @@ export function explainEthError(e: unknown): string {
   if (code === 'INSUFFICIENT_FUNDS') return 'Not enough Sepolia test ETH for the amount plus gas.';
   if (err.revert?.name === 'AmountOutOfRange') return 'AmountOutOfRange: the deposit is outside the contract limits.';
   if (err.revert?.name === 'OnlyOwner') return 'OnlyOwner: only the deployer account can do this.';
+  if (err.revert?.name === 'IsPaused') return 'The cashier is paused for now. Try again later.';
   if (code === 'TIMEOUT') return 'The wait timed out. The transaction was not cancelled. Check the transaction link.';
   return err.shortMessage || err.message || 'The operation failed.';
 }

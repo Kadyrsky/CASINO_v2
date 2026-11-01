@@ -10,3 +10,7 @@
 .vscode/
 *.iml
 **/*.egg-info/
+
+# Hardhat build output (contracts/)
+contracts/cache/
+contracts/artifacts/

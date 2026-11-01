@@ -48,15 +48,23 @@ public record NaebkaProperties(
     public record DeadlockApi(String baseUrl, int timeoutSeconds) {}
 
     /**
-     * MetaMask + Sepolia deposits. Off until {@code contractAddress} is set (deploy contracts/NaebkaCashier.sol first).
-     * {@code siweDomain}/{@code siweUri} must be the address players open in the browser, or MetaMask warns that the
-     * sign-in message is for another site.
+     * MetaMask + Sepolia deposits and withdrawals. Off until {@code contractAddress} is set (deploy
+     * contracts/src/NaebkaCashier.sol first). {@code siweDomain}/{@code siweUri} must be the address players open in
+     * the browser, or MetaMask warns that the sign-in message is for another site.
+     *
+     * <p>Withdrawals also need {@code operatorKey}: the private key of a Sepolia test account that the contract owner
+     * made the operator ({@code setOperator}). It only pays gas; the ETH comes from the contract. {@code maxFeeGwei}
+     * caps what one payout may pay per gas unit, {@code payoutGasLimit} the gas of one payout.
      */
     public record Eth(long chainId, String rpcUrl, String contractAddress, long deployBlock, int confirmations,
                       int pollSeconds, int maxBlockRange, BigDecimal tokensPerEth, String siweDomain, String siweUri,
-                      int linkMessageTtlSeconds) {
+                      int linkMessageTtlSeconds, String operatorKey, long maxFeeGwei, long payoutGasLimit) {
         public boolean configured() {
             return contractAddress != null && !contractAddress.isBlank();
+        }
+
+        public boolean withdrawalsEnabled() {
+            return configured() && operatorKey != null && !operatorKey.isBlank();
         }
     }
 }

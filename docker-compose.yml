@@ -47,6 +47,9 @@ services:
       NAEBKA_ETH_CONFIRMATIONS: ${NAEBKA_ETH_CONFIRMATIONS:-3}
       NAEBKA_ETH_SIWE_DOMAIN: ${NAEBKA_ETH_SIWE_DOMAIN:-localhost:8080}
       NAEBKA_ETH_SIWE_URI: ${NAEBKA_ETH_SIWE_URI:-http://localhost:8080}
+      # Withdrawals to MetaMask: off while NAEBKA_ETH_OPERATOR_KEY is empty (Sepolia test key only).
+      NAEBKA_ETH_OPERATOR_KEY: ${NAEBKA_ETH_OPERATOR_KEY:-}
+      NAEBKA_ETH_MAX_FEE_GWEI: ${NAEBKA_ETH_MAX_FEE_GWEI:-50}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

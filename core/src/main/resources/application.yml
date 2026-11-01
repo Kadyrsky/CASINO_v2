@@ -104,3 +104,9 @@ naebka:
     siwe-domain: localhost:8080
     siwe-uri: http://localhost:8080
     link-message-ttl-seconds: 300
+    # Withdrawals to MetaMask: private key (0x + 64 hex) of the contract's operator account, a Sepolia test account
+    # that only pays gas. Empty = withdrawals off. Never use a key that holds real money.
+    operator-key: ""
+    # A payout never pays more than this per gas unit (Sepolia is usually far below it); above it, payouts wait.
+    max-fee-gwei: 50
+    payout-gas-limit: 150000
