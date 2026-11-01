@@ -32,6 +32,12 @@ const AFTER_END: Duration = Duration::from_secs(10 * 60);
 const AFTER_ERROR: Duration = Duration::from_secs(45);
 /// After a feed that was working stops (Valve's relay sometimes misses a few fragments), or after a stale link.
 const QUICK_RETRY: Duration = Duration::from_secs(20);
+/// A link the bot just got by spectating answers 404 ("Broadcast has not started yet") until Valve's relay has
+/// started the broadcast, which takes from seconds to a few minutes (some broadcasts never start). Such a link is
+/// tried again this often, for this long, before the match counts as over. Retries reuse the cached link, so they
+/// cost no Steam requests.
+const FRESH_LINK_RETRY: Duration = Duration::from_secs(15);
+const FRESH_LINK_WINDOW: Duration = Duration::from_secs(5 * 60);
 const TICK: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
@@ -54,10 +60,13 @@ struct Running {
 /// When to try a match again after its feed stopped, and whether to spectate it instead of using deadlock-api's
 /// public link. A feed that delivered frames may have stopped on a relay hiccup: try again soon (if the match is
 /// over, that attempt gets nothing). A public link that gives nothing is often stale: spectate the match ourselves.
-fn after_stop(frames: u64, from_public_list: bool) -> (Duration, bool) {
+/// A spectated link that gives nothing may not have started yet: keep trying it for a while before giving up.
+/// `empty_for` is how long this match's spectated feeds have given nothing, from the start of the first empty one.
+fn after_stop(frames: u64, from_public_list: bool, empty_for: Duration) -> (Duration, bool) {
     match (frames, from_public_list) {
         (1.., _) => (QUICK_RETRY, false),
         (0, true) => (QUICK_RETRY, true),
+        (0, false) if empty_for < FRESH_LINK_WINDOW => (FRESH_LINK_RETRY, false),
         (0, false) => (AFTER_END, false),
     }
 }
@@ -104,17 +113,28 @@ async fn run_once(cfg: &Config, server: &Arc<Server<SteamBackend>>, http: &reqwe
     let mut running: HashMap<u64, Running> = HashMap::new();
     let mut not_before: HashMap<u64, Instant> = HashMap::new();
     let mut spectate_instead: HashSet<u64> = HashSet::new();
+    // When each match's spectated feeds started giving nothing (see `after_stop`).
+    let mut empty_since: HashMap<u64, Instant> = HashMap::new();
     let mut urls = PublicUrls::default();
 
     loop {
         while let Ok((id, result)) = done_rx.try_recv() {
             if let Some(r) = running.remove(&id) {
                 let frames = r.frames.load(Ordering::Relaxed);
+                let empty_for = if frames == 0 && !r.from_public_list {
+                    empty_since.entry(id).or_insert(r.started).elapsed()
+                } else {
+                    empty_since.remove(&id);
+                    Duration::ZERO
+                };
+                let (wait, spectate) = after_stop(frames, r.from_public_list, empty_for);
                 match &result {
                     Ok(()) => log::info!("feed {id} ended after {frames} frames"),
+                    Err(e) if wait == FRESH_LINK_RETRY => {
+                        log::info!("feed {id} not started yet ({} s so far), trying again: {e}", empty_for.as_secs());
+                    }
                     Err(e) => log::warn!("feed {id} failed after {frames} frames: {e}"),
                 }
-                let (wait, spectate) = after_stop(frames, r.from_public_list);
                 not_before.insert(id, Instant::now() + wait);
                 if spectate {
                     spectate_instead.insert(id);
@@ -125,6 +145,8 @@ async fn run_once(cfg: &Config, server: &Arc<Server<SteamBackend>>, http: &reqwe
         spectate_instead.retain(|id| not_before.contains_key(id) || running.contains_key(id) || urls.by_match.contains_key(id));
 
         let wanted = wanted(&mut con, cfg.max_feeds).await?;
+        // Kept while the match is wanted, so it survives the short waits between tries.
+        empty_since.retain(|id, _| wanted.contains(id) || not_before.contains_key(id) || running.contains_key(id));
         for (id, r) in &running {
             if !wanted.contains(id) {
                 r.stop.store(true, Ordering::Relaxed);
@@ -286,17 +308,24 @@ mod tests {
 
     #[test]
     fn a_feed_that_worked_is_retried_soon() {
-        assert_eq!(after_stop(120, true), (QUICK_RETRY, false));
-        assert_eq!(after_stop(120, false), (QUICK_RETRY, false));
+        assert_eq!(after_stop(120, true, Duration::ZERO), (QUICK_RETRY, false));
+        assert_eq!(after_stop(120, false, Duration::ZERO), (QUICK_RETRY, false));
     }
 
     #[test]
     fn a_stale_public_link_makes_the_bot_spectate() {
-        assert_eq!(after_stop(0, true), (QUICK_RETRY, true));
+        assert_eq!(after_stop(0, true, Duration::ZERO), (QUICK_RETRY, true));
     }
 
     #[test]
-    fn a_spectated_broadcast_that_gives_nothing_is_over() {
-        assert_eq!(after_stop(0, false), (AFTER_END, false));
+    fn a_fresh_spectated_link_is_tried_again_soon() {
+        for s in [5, 60, 180, FRESH_LINK_WINDOW.as_secs() - 1] {
+            assert_eq!(after_stop(0, false, Duration::from_secs(s)), (FRESH_LINK_RETRY, false));
+        }
+    }
+
+    #[test]
+    fn a_spectated_broadcast_that_keeps_giving_nothing_is_over() {
+        assert_eq!(after_stop(0, false, FRESH_LINK_WINDOW), (AFTER_END, false));
     }
 }
