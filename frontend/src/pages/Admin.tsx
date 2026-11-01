@@ -12,6 +12,10 @@ interface Health {
   watcherHeartbeat: string | null;
   oddsEngineHeartbeat: string | null;
   deadlockApiBreaker: 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+  /** The Steam bot fallback; OFF when NAEBKA_DEADLOCK_BOT_BASE_URL is empty. */
+  deadlockBotBreaker: 'CLOSED' | 'OPEN' | 'HALF_OPEN' | 'OFF';
+  /** Where the watcher got its last live match list. */
+  watcherSource: 'deadlock-api' | 'deadlock-bot' | null;
   matchesByStatus: Record<string, number>;
   ledgerDrift: { walletId: string; balance: number; ledger: number }[];
 }
@@ -122,10 +126,20 @@ export default function Admin() {
     <div>
       <PageHeader title="Integrity dashboard" subtitle="Fleet health, the settlement and KYC review queues and ledger reconciliation." />
       <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Card class="p-4"><Stat label="Watcher heartbeat" value={beat(health.data?.watcherHeartbeat)} /></Card>
+        <Card class="p-4">
+          <Stat
+            label="Watcher heartbeat"
+            value={beat(health.data?.watcherHeartbeat)}
+            sub={health.data?.watcherSource ? `live data from ${health.data.watcherSource}` : undefined}
+          />
+        </Card>
         <Card class="p-4"><Stat label="Odds engine heartbeat" value={beat(health.data?.oddsEngineHeartbeat)} /></Card>
         <Card class="p-4">
-          <Stat label="Deadlock API breaker" value={<Badge tone={health.data?.deadlockApiBreaker === 'CLOSED' ? 'win' : 'loss'}>{health.data?.deadlockApiBreaker ?? '…'}</Badge>} />
+          <Stat
+            label="Deadlock API breaker"
+            value={<Badge tone={health.data?.deadlockApiBreaker === 'CLOSED' ? 'win' : 'loss'}>{health.data?.deadlockApiBreaker ?? '…'}</Badge>}
+            sub={`Steam bot fallback: ${health.data?.deadlockBotBreaker ?? '…'}`}
+          />
         </Card>
         <Card class="p-4">
           <Stat

@@ -69,10 +69,13 @@ public class SettlementService {
             try {
                 processOne(m);
             } catch (Exceptions.ExternalScraperUnavailableException e) {
-                // Leave everything pending; the breaker decides when we try again.
-                jdbc.sql("UPDATE matches SET next_settle_at = now() + interval '60 seconds' WHERE status = 'ENDED'")
-                        .update();
-                log.warn("Settlement paused: {}", e.getMessage());
+                // No source can answer: leave everything pending until the first one can (its Retry-After).
+                long wait = e instanceof DeadlockReportClient.Unavailable u
+                        ? Math.max(30, Math.min(900, u.retryAfterSeconds()))
+                        : 60;
+                jdbc.sql("UPDATE matches SET next_settle_at = now() + make_interval(secs => ?) WHERE status = 'ENDED'")
+                        .param(wait).update();
+                log.warn("Settlement paused for {} s: {}", wait, e.getMessage());
                 return;
             }
         }

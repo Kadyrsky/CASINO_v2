@@ -27,15 +27,15 @@ public class AdminController {
     private final JdbcClient jdbc;
     private final MatchService matches;
     private final SettlementService settlement;
-    private final DeadlockReportClient reportClient;
+    private final FallbackReportSource reportSources;
     private final StringRedisTemplate redis;
 
     public AdminController(JdbcClient jdbc, MatchService matches, SettlementService settlement,
-                           DeadlockReportClient reportClient, StringRedisTemplate redis) {
+                           FallbackReportSource reportSources, StringRedisTemplate redis) {
         this.jdbc = jdbc;
         this.matches = matches;
         this.settlement = settlement;
-        this.reportClient = reportClient;
+        this.reportSources = reportSources;
         this.redis = redis;
     }
 
@@ -69,7 +69,9 @@ public class AdminController {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("watcherHeartbeat", redis.opsForValue().get("watcher:heartbeat"));
         out.put("oddsEngineHeartbeat", redis.opsForValue().get("odds-engine:heartbeat"));
-        out.put("deadlockApiBreaker", reportClient.state());
+        // Which live-match source the watcher used last: "deadlock-api" or "deadlock-bot".
+        out.put("watcherSource", redis.opsForValue().get("watcher:source"));
+        out.putAll(reportSources.health());
         out.put("matchesByStatus", jdbc.sql("SELECT status, count(*) FROM matches GROUP BY status")
                 .query((rs, i) -> Map.entry(rs.getString(1), rs.getLong(2))).list().stream()
                 .collect(java.util.stream.Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));

@@ -20,6 +20,7 @@ public record NaebkaProperties(
         Settlement settlement,
         Poker poker,
         DeadlockApi deadlockApi,
+        DeadlockBot deadlockBot,
         Eth eth) {
 
     public enum CurrencyMode { PLAY_MONEY, REAL_MONEY }
@@ -46,6 +47,13 @@ public record NaebkaProperties(
                         int minBuyInBigBlinds, int maxBuyInBigBlinds, boolean blockSameIp) {}
 
     public record DeadlockApi(String baseUrl, int timeoutSeconds) {}
+
+    /** The team's Steam bot in {@code serve} mode (deadlock-bot/): asked when deadlock-api refuses. Blank URL = off. */
+    public record DeadlockBot(String baseUrl, String token, int timeoutSeconds) {
+        public boolean enabled() {
+            return baseUrl != null && !baseUrl.isBlank();
+        }
+    }
 
     /**
      * MetaMask + Sepolia deposits and withdrawals. Off until {@code contractAddress} is set (deploy

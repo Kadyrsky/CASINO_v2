@@ -1,8 +1,15 @@
-from typing import Any
+import time
+from typing import Any, cast
 
-from naebka_live.deadlock_api import parse_active_match
+from naebka_live.deadlock_api import PlayerLookupUnavailable, parse_active_match
 from naebka_live.events import MatchState
-from naebka_live.watcher import diff_events, pick_candidates
+from naebka_live.watcher import (
+    MISSING_POLLS_BEFORE_END,
+    MISSING_POLLS_WHILE_BLIND,
+    Watcher,
+    diff_events,
+    pick_candidates,
+)
 
 
 def state(nw: tuple[int, int] = (10_000, 10_000), alive: tuple[int, int] = (16, 16), winner: int | None = None,
@@ -68,3 +75,53 @@ def test_candidates_are_fresh_normal_matches_best_rank_first() -> None:
     ]
     picked = pick_candidates(active, tracked={"5"}, slots=2)
     assert [m.match_id for m in picked] == ["4", "1"]
+
+
+class FakeBus:
+    def __init__(self) -> None:
+        self.published: list[str] = []
+        self.values: dict[str, Any] = {}
+
+    def publish(self, channel: str, message: str) -> None:
+        self.published.append(message)
+
+    def set(self, key: str, value: Any, ex: int | None = None) -> None:
+        self.values[key] = value
+
+
+class BlindApi:
+    """The live list no longer has the match, and the player lookup can't run (only the bot answers)."""
+
+    last_source = "deadlock-bot"
+
+    def __init__(self, first: list[Any]) -> None:
+        self.first = first
+        self.calls = 0
+
+    def active_matches(self, account_id: int | None = None) -> list[Any]:
+        if account_id is not None:
+            raise PlayerLookupUnavailable("deadlock-api is rate limited")
+        self.calls += 1
+        return self.first if self.calls == 1 else []
+
+
+def test_match_is_not_ended_early_while_the_player_lookup_is_blind() -> None:
+    raw = raw_match(1)
+    raw["start_time"] = int(time.time()) - 120  # a fresh match, so the watcher picks it
+    api = BlindApi([parse_active_match(raw)])
+    bus = FakeBus()
+    watcher = Watcher(cast(Any, api), cast(Any, bus), max_tracked=4)
+    watcher.poll_once()
+    assert "1" in watcher.tracked
+
+    for _ in range(MISSING_POLLS_BEFORE_END):
+        watcher.poll_once()
+    assert "1" in watcher.tracked, "three blind polls must not end the match"
+
+    for _ in range(MISSING_POLLS_WHILE_BLIND - MISSING_POLLS_BEFORE_END):
+        watcher.poll_once()
+    assert "1" not in watcher.tracked
+    assert any('"match.ended"' in m for m in bus.published)
+
+    watcher.heartbeat()
+    assert bus.values["watcher:source"] == "deadlock-bot"

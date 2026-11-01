@@ -19,6 +19,11 @@ spring:
   mvc:
     problemdetails:
       enabled: true
+  # Several threads, so a slow match-result request in settlement can't delay the STALE watchdog.
+  task:
+    scheduling:
+      pool:
+        size: 4
   jackson:
     default-property-inclusion: non_null
 
@@ -85,6 +90,13 @@ naebka:
   deadlock-api:
     base-url: https://api.deadlock-api.com
     timeout-seconds: 10
+  # The team's Steam bot (deadlock-bot/, `serve` mode). Asked for match results only when deadlock-api refuses
+  # ("too many requests") or is down. Empty base-url = off.
+  deadlock-bot:
+    base-url: ""
+    token: ""
+    # Covers a Steam login when the bot's session is closed.
+    timeout-seconds: 30
   # MetaMask + Sepolia deposits (course web3 lab). Sepolia ETH is test money, so this stays PLAY_MONEY.
   eth:
     chain-id: 11155111
