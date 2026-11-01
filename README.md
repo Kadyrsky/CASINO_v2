@@ -26,6 +26,7 @@ Live matches appear within ~10 s: the watcher picks fresh ranked games from `api
 | `redis` | 56379 | Redis 7: message broker and WebSocket fan-out |
 | `watcher` | – | Python: polls the Deadlock API and publishes normalized match events |
 | `odds-engine` | – | Python: prices markets from the event stream |
+| `deadlock-bot` | – | Optional (`--profile bot`). Rust Steam bot: answers when deadlock-api says "too many requests" ([below](#steam-bot-fallback)) |
 
 The admin account (manual-review queue and integrity dashboard at `/admin`) comes from `.env.example`
 (`NAEBKA_ADMIN_USERNAME` / `NAEBKA_ADMIN_PASSWORD`). Copy it to `.env` to change values.
@@ -166,6 +167,9 @@ flowchart LR
   C <--> P[(PostgreSQL<br/>append-only ledger)]
   C -->|ws fan-out| R
   C -->|post-match report| DL
+  W -.->|on 429 / down| SB[deadlock-bot<br/>Rust, Steam]
+  C -.->|on 429 / down| SB
+  SB -->|Steam game coordinator| V[(Valve)]
   B[Browser<br/>SolidJS] -->|REST + WebSocket| N[nginx] --> C
 ```
 
@@ -190,6 +194,39 @@ flowchart LR
    match goes to the manual-review queue.
 7. **Watchdogs**: no watcher data for 60 s → STALE and suspended. Stale for 20 min → ended and settled from the
    report.
+
+## Steam bot fallback
+
+deadlock-api limits each IP. The live match list allows 100 requests/s (and is cached for 120 s), but a match
+result that has to come fresh from Steam, which is the case right after a match ends, allows only **3 requests per
+hour**. Settlement asks for every ended match, so it used to hit "429 Too Many Requests" and stall.
+
+`deadlock-bot/` is the team's own Steam bot. In `serve` mode it stays logged in to Steam and answers
+`GET /v1/matches/active` and `GET /v1/matches/{id}/metadata` with the same JSON as deadlock-api, so the site only
+needs a second address:
+
+* **Settlement** (`live/FallbackReportSource.java`): deadlock-api first. On 429/503 its breaker opens for as long as
+  `Retry-After` says (60 s without one), and the bot is asked instead. "Not processed yet" (404) from the API is
+  final for that attempt, so the bot's smaller budget isn't spent. When both are down, settlement waits for the
+  sooner of the two `Retry-After`s instead of a fixed minute.
+* **Watcher** (`live/naebka_live/deadlock_api.py`): the same order for the live list. The bot can't look up one
+  player's match (`?account_id=`), so while only the bot answers, a match that drops out of the list is called
+  ended after 12 missing polls instead of 3.
+* **Admin dashboard**: shows both breakers and whether the watcher is on `deadlock-api` or `deadlock-bot`.
+
+The bot keeps its own waits so the Steam account doesn't look like a bot hammering Valve: at most one live list and
+one match result per minute and one spectate per 5 minutes, with answers cached. Over that it answers `429` with
+`Retry-After`, like deadlock-api.
+
+Run it (needs a separate Steam account with Deadlock access; see [deadlock-bot/README.md](deadlock-bot/README.md)):
+
+```bash
+docker compose --profile bot up --build -d
+docker compose run --rm deadlock-bot login --username <bot steam login>   # once: password + Steam Guard
+```
+
+The login token is kept in the `botdata` volume. Without the `bot` profile everything works as before: requests to
+the bot fail fast and settlement waits for deadlock-api.
 
 ## KYC
 
@@ -227,21 +264,21 @@ Germany, Hungary, Montenegro, Slovenia, Portugal, Belgium, Ireland, Bulgaria, Gr
 ## Tests
 
 ```bash
-# Java: 64 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules,
-# Ethereum signatures, deposit-log parsing, payout encoding and signing)
+# Java: 72 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules,
+# deadlock-api -> Steam bot fallback, Ethereum signatures, deposit-log parsing, payout encoding and signing)
 cd core && mvn test
 # + 36 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
 cd core && mvn -Pit test
 
-# Python: 21 tests, mypy --strict
+# Python: 28 tests, mypy --strict
 cd live && python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"   # bin/ on Linux/macOS
 .venv/Scripts/python -m pytest && .venv/Scripts/python -m mypy naebka_live tests
 
 # Frontend (no local Node needed)
 docker run --rm -v "$PWD/frontend:/app" -w /app node:22-alpine sh -c "npm install && npx tsc --noEmit && npx vp lint src && npm run build"
 
-# Cashier contract: 17 Hardhat tests (no local Node needed)
-docker run --rm -v "$PWD/contracts:/app" -w /app node:22-alpine sh -c "npm ci && npx hardhat test"
+# Java: 72 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules,
+# deadlock-api -> Steam bot fallback, Ethereum signatures, deposit-log parsing, payout encoding and signing)
 ```
 
 What the integration tests prove (Definition of Done: "end-to-end simulated match flows: place, suspend, reprice,
@@ -271,7 +308,7 @@ settle" via the scripted `MatchSimulator`):
 | RFC 7807 errors, Idempotency-Key, cursor pagination | `common/GlobalExceptionHandler.java`, `common/Cursor.java` |
 | JWT (never in URLs), bcrypt, sessions, lockout (Risk #2) | `auth/*`: the WebSocket authenticates with its first message, not a query string |
 | Suspend-then-reprice, odds_history, plausibility watchdog | `live/MatchService.java`, `live/BetService.java` |
-| Settlement reconciliation + manual review | `live/SettlementService.java`, `live/DeadlockReportClient.java` (circuit breaker), `/admin` |
+| Settlement reconciliation + manual review | `live/SettlementService.java`, `live/FallbackReportSource.java` + `live/DeadlockReportClient.java` (circuit breakers, Steam bot fallback), `/admin` |
 | BettingEngine UML | `live/*`; markets are DB-driven (match winner, duration over/under 30:00) |
 | Slot machine UML (SlotMachine, Reel, Paytable, Payline, ProvablyFairRNG, BonusGame, JackpotPool…) | `slots/*` |
 | Poker UML (PokerTable, Player, Deck, HandEvaluator, PotManager, Pot…) | `poker/*`: one actor thread per table |

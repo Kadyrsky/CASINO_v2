@@ -1,0 +1,4 @@
+/target
+# Output of `deadlock-bot active > live.json` and saved reports: real players' account IDs.
+live.json
+*.meta.bz2

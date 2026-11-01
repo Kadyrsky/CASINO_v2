@@ -20,7 +20,13 @@ from dataclasses import dataclass, field
 
 import redis
 
-from naebka_live.deadlock_api import GAME_MODE_NORMAL, ActiveMatch, DeadlockApi, DeadlockApiError
+from naebka_live.deadlock_api import (
+    GAME_MODE_NORMAL,
+    ActiveMatch,
+    DeadlockApi,
+    DeadlockApiError,
+    PlayerLookupUnavailable,
+)
 from naebka_live.events import MATCH_EVENTS_CHANNEL, JsonValue, MatchEvent, MatchState, state_payload
 
 log = logging.getLogger("watcher")
@@ -33,6 +39,9 @@ SWING_MIN_LEAD = 2_000
 SWING_SHARE = 0.06
 #: Polls a match may be missing (and not found via player lookup) before it counts as ended.
 MISSING_POLLS_BEFORE_END = 3
+#: The same while the player lookup can't run (only the Steam bot answers, and it has no lookup). A match that just
+#: dropped out of the top 200 then looks the same as one that ended, so wait longer before calling it ended.
+MISSING_POLLS_WHILE_BLIND = 12
 #: Tracked matches are re-announced this often, so a consumer that missed the first announcement
 #: (e.g. the core was restarting) still picks the match up. The core treats repeats as no-ops.
 REANNOUNCE_S = 60.0
@@ -142,11 +151,15 @@ class Watcher:
 
     def _update(self, match_id: str, seen: ActiveMatch | None) -> None:
         t = self.tracked[match_id]
+        blind = False
         if seen is None:
-            seen = self._lookup_by_player(t)
+            try:
+                seen = self._lookup_by_player(t)
+            except PlayerLookupUnavailable:
+                blind = True
         if seen is None:
             t.missing_polls += 1
-            if t.missing_polls >= MISSING_POLLS_BEFORE_END:
+            if t.missing_polls >= (MISSING_POLLS_WHILE_BLIND if blind else MISSING_POLLS_BEFORE_END):
                 # Gone from the live list and no player is in it any more: the match is over.
                 # The winner is unknown from the stream; settlement uses the official report.
                 payload = state_payload(t.state, winning_team=t.state.winning_team)
@@ -164,24 +177,29 @@ class Watcher:
             del self.tracked[match_id]
 
     def _lookup_by_player(self, t: Tracked) -> ActiveMatch | None:
+        """The tracked match found through one of its players, or None. Raises PlayerLookupUnavailable."""
         for account_id in t.account_ids[:2]:
-            try:
-                for m in self.api.active_matches(account_id=account_id):
-                    if m.match_id == t.match.match_id:
-                        return m
-            except DeadlockApiError:
-                return None
+            for m in self.api.active_matches(account_id=account_id):
+                if m.match_id == t.match.match_id:
+                    return m
         return None
 
     def heartbeat(self) -> None:
         tracked: list[JsonValue] = list(self.tracked)
         self.bus.set("watcher:heartbeat", MatchEvent("watcher.heartbeat", "", {"tracked": tracked}).ts, ex=60)
+        # Shown on the admin dashboard: is the watcher on deadlock-api or on the Steam bot?
+        if self.api.last_source:
+            self.bus.set("watcher:source", self.api.last_source, ex=60)
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    api = DeadlockApi(os.environ.get("DEADLOCK_API_BASE_URL", "https://api.deadlock-api.com"))
+    api = DeadlockApi(
+        os.environ.get("DEADLOCK_API_BASE_URL", "https://api.deadlock-api.com"),
+        bot_url=os.environ.get("DEADLOCK_BOT_URL") or None,
+        bot_token=os.environ.get("DEADLOCK_BOT_TOKEN") or None,
+    )
     bus = redis.Redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:56379/0"))
     poll_s = float(os.environ.get("WATCHER_POLL_SECONDS", "10"))
     watcher = Watcher(api, bus, int(os.environ.get("WATCHER_MAX_TRACKED", "8")))

@@ -39,6 +39,10 @@ services:
       NAEBKA_ADMIN_PASSWORD: ${NAEBKA_ADMIN_PASSWORD:-admin12345}
       NAEBKA_POKER_BLOCK_SAME_IP: ${NAEBKA_POKER_BLOCK_SAME_IP:-false}
       NAEBKA_DEADLOCK_API_BASE_URL: ${DEADLOCK_API_BASE_URL:-https://api.deadlock-api.com}
+      # Match results come from the Steam bot when deadlock-api says "too many requests".
+      # Harmless when the bot isn't running: the request just fails and settlement waits as before.
+      NAEBKA_DEADLOCK_BOT_BASE_URL: ${DEADLOCK_BOT_URL:-http://deadlock-bot:8090}
+      NAEBKA_DEADLOCK_BOT_TOKEN: ${DEADLOCK_BOT_TOKEN:-}
       # MetaMask + Sepolia deposits: off while NAEBKA_ETH_CONTRACT_ADDRESS is empty.
       NAEBKA_ETH_CONTRACT_ADDRESS: ${NAEBKA_ETH_CONTRACT_ADDRESS:-}
       NAEBKA_ETH_DEPLOY_BLOCK: ${NAEBKA_ETH_DEPLOY_BLOCK:-0}
@@ -63,10 +67,25 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       DEADLOCK_API_BASE_URL: ${DEADLOCK_API_BASE_URL:-https://api.deadlock-api.com}
+      DEADLOCK_BOT_URL: ${DEADLOCK_BOT_URL:-http://deadlock-bot:8090}
+      DEADLOCK_BOT_TOKEN: ${DEADLOCK_BOT_TOKEN:-}
       WATCHER_MAX_TRACKED: ${WATCHER_MAX_TRACKED:-8}
       WATCHER_POLL_SECONDS: ${WATCHER_POLL_SECONDS:-10}
     depends_on:
       redis: { condition: service_healthy }
+
+  # Steam bot fallback (deadlock-bot/README.md). Optional, so teammates without a bot account can still run the site:
+  #   docker compose --profile bot up --build -d
+  #   docker compose run --rm deadlock-bot login --username <bot steam login>   # once; approve Steam Guard
+  # No ports are published: only core and watcher reach it, over the Compose network.
+  deadlock-bot:
+    build: ./deadlock-bot
+    profiles: ["bot"]
+    restart: unless-stopped
+    environment:
+      DEADLOCK_BOT_TOKEN: ${DEADLOCK_BOT_TOKEN:-}
+      RUST_LOG: ${DEADLOCK_BOT_LOG:-warn,deadlock_bot=info}
+    volumes: [botdata:/data]
 
   # Heuristic odds engine: consumes match events, publishes odds updates.
   odds-engine:
@@ -87,3 +106,5 @@ services:
 
 volumes:
   pgdata:
+  # The bot's saved Steam login token and request log. Treat it like a password.
+  botdata:
