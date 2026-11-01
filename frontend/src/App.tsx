@@ -14,6 +14,7 @@ const WalletPage = lazy(() => import('./pages/Wallet'));
 const Slots = lazy(() => import('./pages/Slots'));
 const PokerLobby = lazy(() => import('./pages/PokerLobby'));
 const PokerTablePage = lazy(() => import('./pages/PokerTable'));
+const Admin = lazy(() => import('./pages/Admin'));
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 5_000, retry: 1, refetchOnWindowFocus: false } },
@@ -32,6 +33,7 @@ export default function App() {
         <Route path="/slots" component={Slots} />
         <Route path="/poker" component={PokerLobby} />
         <Route path="/poker/:id" component={PokerTablePage} />
+        <Route path="/admin" component={() => <RequireAuth admin><Admin /></RequireAuth>} />
         <Route path="*" component={() => <p class="py-24 text-center text-ink-400">Page not found.</p>} />
       </Router>
     </QueryClientProvider>
