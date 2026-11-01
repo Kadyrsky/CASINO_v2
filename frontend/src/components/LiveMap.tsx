@@ -7,12 +7,12 @@
  */
 import { A } from '@solidjs/router';
 import { createQuery } from '@tanstack/solid-query';
-import { createMemo, createSignal, For, Index, onCleanup, Show } from 'solid-js';
+import { createMemo, createSignal, For, Index, onCleanup, Show, type JSX } from 'solid-js';
 import { get } from '../api/client';
 import type { FrameEvent, FrameObjective, FramePlayer, LiveAssets, LiveFrame, LiveMatchInfo, LivePlayer } from '../api/types';
 import { auth } from '../lib/auth';
 import { clock, compact, tokens } from '../lib/format';
-import { TEAM_COLOR, TEAM_NAMES, TEAM_TEXT, heroOf, itemOf, toMap, useLiveAssets } from '../lib/live';
+import { TEAM_COLOR, TEAM_NAMES, TEAM_TEXT, heroOf, itemOf, objectiveIcon, toMap, useLiveAssets } from '../lib/live';
 import { useTopic } from '../lib/ws';
 import { HeroIcon, RankBadge, playerName } from './live';
 import { Badge, Button, Card, Spinner, Tabs } from './ui';
@@ -98,40 +98,79 @@ function usePlayback() {
   return { push, view, paused, setPaused, jumpToLive, behind, history, events, count: () => frames.length };
 }
 
+/** Radius of each objective's icon (map units; heroes are 17). */
 const OBJECTIVE_SIZE: Record<FrameObjective['kind'], number> = {
-  guardian: 11,
+  guardian: 12,
   walker: 16,
-  base_guardian: 9,
+  base_guardian: 10,
   patron: 18,
-  patron_core: 14,
+  patron_core: 15,
   midboss: 15,
 };
 
+/** Glyphs (patrons, Mid-Boss) sit inside the disc; the guardian and walker pictures fill it. */
+const isGlyph = (kind: FrameObjective['kind']) => kind === 'patron' || kind === 'patron_core' || kind === 'midboss';
+
+function objectiveColor(kind: FrameObjective['kind'], team: 0 | 1 | null): string {
+  return kind === 'midboss' ? '#b07cff' : team == null ? '#8a83a3' : TEAM_COLOR[team];
+}
+
+/**
+ * Objectives are rounded squares, so they never look like the round hero markers. The outline is the health left,
+ * running clockwise from the top left corner.
+ */
 function ObjectiveMarker(props: { o: FrameObjective; at: [number, number] }) {
   const s = () => OBJECTIVE_SIZE[props.o.kind] ?? 10;
-  const color = () => (props.o.kind === 'midboss' ? '#b07cff' : props.o.team == null ? '#8a83a3' : TEAM_COLOR[props.o.team]);
+  const color = () => objectiveColor(props.o.kind, props.o.team);
   const share = () => (props.o.max_hp > 0 ? Math.min(1, props.o.hp / props.o.max_hp) : 1);
-  const ring = () => 2 * Math.PI * (s() + 4);
+  const outer = () => s() + 4;
+  // Glyphs are a little smaller than the square, so the dark edge frames them; pictures fill it.
+  const img = () => (isGlyph(props.o.kind) ? s() * 0.8 : s());
   return (
     <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000})`}>
       <title>{`${props.o.kind.replace('_', ' ')} · ${Math.round(share() * 100)}%`}</title>
-      <circle r={s() + 4} fill="none" stroke="rgb(0 0 0 / 0.5)" stroke-width="3" />
-      <circle
-        r={s() + 4}
+      <rect x={-outer()} y={-outer()} width={outer() * 2} height={outer() * 2} rx={outer() * 0.35} fill="#0b0a10" stroke="rgb(0 0 0 / 0.5)" stroke-width="3" />
+      <rect
+        x={-outer()}
+        y={-outer()}
+        width={outer() * 2}
+        height={outer() * 2}
+        rx={outer() * 0.35}
         fill="none"
         stroke={color()}
         stroke-width="3"
-        stroke-dasharray={`${ring() * share()} ${ring()}`}
-        transform="rotate(-90)"
+        pathLength="100"
+        stroke-dasharray={`${share() * 100} 100`}
       />
       <Show
-        when={props.o.kind === 'patron' || props.o.kind === 'patron_core' || props.o.kind === 'midboss'}
-        fallback={<rect x={-s() / 2} y={-s() / 2} width={s()} height={s()} transform="rotate(45)" fill={color()} stroke="#0b0a10" stroke-width="2" />}
+        when={objectiveIcon(props.o.kind, props.o.team)}
+        fallback={<rect x={-s() / 2} y={-s() / 2} width={s()} height={s()} transform="rotate(45)" fill={color()} />}
       >
-        <circle r={s() / 1.6} fill={color()} stroke="#0b0a10" stroke-width="2" />
+        {(src) => (
+          <image href={src()} x={-img()} y={-img()} width={img() * 2} height={img() * 2} clip-path="url(#rounded)" preserveAspectRatio="xMidYMid slice" />
+        )}
       </Show>
     </g>
   );
+}
+
+/** The icon in front of an event: the objective's own icon for "objective fell", else a symbol. */
+function eventIcon(e: FrameEvent): JSX.Element {
+  if (e.type === 'objective_destroyed') {
+    const src = objectiveIcon(e.kind, e.team);
+    if (src) {
+      return (
+        <img
+          src={src}
+          alt=""
+          class={`size-5 rounded-md bg-ink-950 object-cover ${isGlyph(e.kind) ? 'p-0.5' : ''}`}
+          style={{ 'box-shadow': `0 0 0 1.5px ${objectiveColor(e.kind, e.team)}` }}
+          loading="lazy"
+        />
+      );
+    }
+  }
+  return <span>{e.type === 'kill' ? '⚔' : e.type === 'purchase' ? '🛒' : e.type === 'level_up' ? '⬆' : '💥'}</span>;
 }
 
 function HeroMarker(props: {
@@ -192,6 +231,46 @@ function describe(e: FrameEvent, name: (id: number | null | undefined) => string
       return `${name(e.account_id)} reached level ${e.level}`;
     case 'objective_destroyed':
       return `${e.team != null ? TEAM_NAMES[e.team] : 'A'} ${e.kind.replace('_', ' ')} fell`;
+  }
+}
+
+interface Who {
+  name: string;
+  heroId?: number;
+  team?: 0 | 1;
+}
+
+/** A player in the event list: hero icon, then the name in the team's colour, so bettors can tell who is who. */
+function PlayerTag(props: { who: Who; assets?: LiveAssets }) {
+  return (
+    <span class="inline-flex min-w-0 items-center gap-1">
+      <Show when={props.who.heroId}>
+        {(heroId) => <HeroIcon assets={props.assets} heroId={heroId()} class="size-4" />}
+      </Show>
+      <span class={`truncate font-medium ${props.who.team == null ? 'text-ink-200' : TEAM_TEXT[props.who.team]}`}>
+        {props.who.name}
+      </span>
+    </span>
+  );
+}
+
+/** The same sentence as `describe`, with every player shown by `tag`. */
+function eventText(e: FrameEvent, tag: (id: number) => JSX.Element): JSX.Element {
+  const words = (text: string) => <span class="shrink-0 whitespace-nowrap text-ink-400">{text}</span>;
+  switch (e.type) {
+    case 'kill':
+      return e.killer ? <>{tag(e.killer)}{words('killed')}{tag(e.victim)}</> : <>{tag(e.victim)}{words('died')}</>;
+    case 'purchase':
+      return <>{tag(e.account_id)}{words('bought')}</>;
+    case 'level_up':
+      return <>{tag(e.account_id)}{words(`reached level ${e.level}`)}</>;
+    case 'objective_destroyed':
+      return (
+        <span class="truncate">
+          <span class={e.team != null ? `font-medium ${TEAM_TEXT[e.team]}` : ''}>{e.team != null ? TEAM_NAMES[e.team] : 'A'}</span>
+          {` ${e.kind.replace('_', ' ')} fell`}
+        </span>
+      );
   }
 }
 
@@ -256,6 +335,12 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
   const at = (x: number, y: number) => toMap(x, y, radius(), play.view()?.frame.minimap);
   const players = () => play.view()?.frame.players ?? [];
   const selectedPlayer = () => players().find((p) => p.account_id === selected());
+  // Hero and team from the broadcast, or from the match's roster before the first frame.
+  const who = (id: number): Who => {
+    const live = players().find((p) => p.account_id === id);
+    const listed = names().get(id);
+    return { name: name(id), heroId: live?.hero_id ?? listed?.hero_id, team: live?.team ?? listed?.team };
+  };
 
   return (
     <Card
@@ -281,6 +366,7 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
                 <svg viewBox="0 0 1000 1000" class="size-full" role="img" aria-label="Live map" onClick={() => setSelected(null)}>
                   <defs>
                     <clipPath id="hero-clip"><circle r="14" /></clipPath>
+                    <clipPath id="rounded" clipPathUnits="objectBoundingBox"><rect width="1" height="1" rx="0.25" /></clipPath>
                     <filter id="grey"><feColorMatrix type="saturate" values="0" /></filter>
                   </defs>
                   <Show when={assets.data?.map.image}>
@@ -411,10 +497,10 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
                     {(e) => (
                       <li class="flex items-center gap-2 rounded-lg bg-ink-850 px-2.5 py-1.5 text-xs">
                         <span class="tabular w-10 shrink-0 font-mono text-ink-500">{clock(e.time_s)}</span>
-                        <span class="shrink-0">
-                          {e.type === 'kill' ? '⚔' : e.type === 'purchase' ? '🛒' : e.type === 'level_up' ? '⬆' : '💥'}
+                        <span class="grid w-5 shrink-0 place-items-center">{eventIcon(e)}</span>
+                        <span class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden text-ink-200" title={describe(e, heroName)}>
+                          {eventText(e, (id) => <PlayerTag who={who(id)} assets={assets.data} />)}
                         </span>
-                        <span class="min-w-0 flex-1 truncate text-ink-200" title={describe(e, heroName)}>{describe(e, name)}</span>
                         <Show when={e.type === 'purchase' ? itemOf(assets.data, (e as { item_id: number }).item_id) : null}>
                           {(it) => (
                             <span class="flex shrink-0 items-center gap-1 text-ink-300">

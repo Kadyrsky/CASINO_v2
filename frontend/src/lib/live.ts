@@ -1,7 +1,8 @@
 /** Helpers for the live matches page and the realtime map: assets, ranks, modes, map coordinates. */
 import { createQuery } from '@tanstack/solid-query';
 import { get } from '../api/client';
-import type { GameMode, LiveAssets, MatchMode } from '../api/types';
+import type { GameMode, LiveAssets, MatchMode, ObjectiveKind } from '../api/types';
+import { ITEM_ICONS, wikiKey } from './wikiIcons';
 
 /** Hero, rank and item names and images, and the map (cached by the core for an hour). */
 export function useLiveAssets() {
@@ -46,8 +47,28 @@ export function heroOf(assets: LiveAssets | undefined, id: number) {
   return assets?.heroes[String(id)] ?? null;
 }
 
+/** An item's name and icon: the Deadlock Wiki's icon (the game's current art) when there is one, else deadlock-api's. */
 export function itemOf(assets: LiveAssets | undefined, id: number) {
-  return assets?.items[String(id)] ?? null;
+  const item = assets?.items[String(id)];
+  if (!item) return null;
+  const file = ITEM_ICONS[wikiKey(item.name)];
+  return file ? { ...item, image: `/icons/items/${file}.webp` } : item;
+}
+
+/** A map objective's icon from the Deadlock Wiki (see scripts/wiki_icons.py). Patrons show their team's glyph. */
+export function objectiveIcon(kind: ObjectiveKind, team: 0 | 1 | null): string | null {
+  switch (kind) {
+    case 'guardian':
+    case 'base_guardian':
+      return '/icons/objectives/guardian.webp';
+    case 'walker':
+      return '/icons/objectives/walker.webp';
+    case 'patron':
+    case 'patron_core':
+      return team == null ? null : `/icons/objectives/patron-${team}.webp`;
+    case 'midboss':
+      return '/icons/objectives/midboss.webp';
+  }
 }
 
 export const MODE_LABEL: Record<MatchMode, string> = {

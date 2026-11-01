@@ -208,6 +208,10 @@ purchases, level-ups, objectives destroyed), **stats** (level, K/D/A, souls, hea
 items) and **souls** (the lead over time). It plays about 25 s behind the real game: Valve's broadcast delay (about
 21 s) plus a few seconds of smoothing. You can pause and jump back to live.
 
+Item and objective icons are the game's current art from the [Deadlock Wiki](https://deadlock.wiki), stored as small
+WebP files in `frontend/public/icons/`. Refresh them after a patch with `python frontend/scripts/wiki_icons.py` (needs
+Pillow). Items the wiki has no icon for keep deadlock-api's.
+
 Who may watch: admins and premium players (`POST /api/admin/users/{id}/premium {"premium": true}`) can watch every
 match. Other logged-in players can watch a match once they have at least `LIVE_VIEW_MIN_STAKE_TOKENS` (100) staked on
 it. Set it to 0 to open the map to every logged-in player.

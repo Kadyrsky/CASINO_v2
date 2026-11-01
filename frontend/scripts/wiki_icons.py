@@ -1,0 +1,136 @@
+"""Downloads item and objective icons from the Deadlock Wiki (deadlock.wiki) for the realtime map.
+
+    python scripts/wiki_icons.py        (from frontend/, needs Pillow: pip install pillow)
+
+Writes 64 px WebP copies to public/icons/ and the name -> file table to src/lib/wikiIcons.ts. Run it again when
+new items come out. The images are Valve's game art as hosted by the wiki (https://deadlock.wiki).
+"""
+import io
+import json
+import re
+import time
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+from PIL import Image
+
+API = 'https://deadlock.wiki/api.php'
+# The site's item list (the watcher's source too), for items the wiki's icon category misses.
+ITEMS = 'https://api.deadlock-api.com/v1/assets/items'
+UA = {'User-Agent': 'naebka-icons/1.0 (student project; occasional icon import)'}
+SIZE = 64
+ROOT = Path(__file__).resolve().parent.parent
+OUT = ROOT / 'public' / 'icons'
+
+# Objective kind (as the bot reports it) -> wiki file. The wiki has no minimap icons for guardians and walkers, so
+# their infobox icons are used; patrons use each team's glyph and the Mid-Boss the Rejuvenator it drops.
+OBJECTIVES = {
+    'guardian': 'Guardian.png',
+    'walker': 'Walker Icon.png',
+    'patron-0': 'Hidden King alt icon.png',
+    'patron-1': 'Archmother alt icon.png',
+    'midboss': 'Rejuvenator.png',
+}
+
+
+def api(**params):
+    url = API + '?' + urllib.parse.urlencode({'format': 'json', **params})
+    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=60) as r:
+        return json.load(r)
+
+
+def category_files(category):
+    files, cont = {}, {}
+    while True:
+        d = api(action='query', generator='categorymembers', gcmtitle='Category:' + category, gcmtype='file',
+                gcmlimit='500', prop='imageinfo', iiprop='url', **cont)
+        for p in d.get('query', {}).get('pages', {}).values():
+            if p.get('imageinfo'):
+                files[p['title'].removeprefix('File:')] = p['imageinfo'][0]['url']
+        if 'continue' not in d:
+            return files
+        cont = d['continue']
+
+
+def file_urls(titles, min_width=0):
+    """URLs of the wiki files that exist among `titles` and are at least `min_width` px wide (asked 50 at a time)."""
+    titles, urls = list(titles), {}
+    for i in range(0, len(titles), 50):
+        d = api(action='query', titles='|'.join('File:' + t for t in titles[i:i + 50]), prop='imageinfo', iiprop='url|size')
+        # The API reports titles with underscores turned back into spaces; map them back to what was asked.
+        asked = {t.replace('_', ' '): t for t in titles[i:i + 50]}
+        for p in d['query']['pages'].values():
+            if p.get('imageinfo') and p['imageinfo'][0]['width'] >= min_width:
+                title = p['title'].removeprefix('File:')
+                urls[asked.get(title, title)] = p['imageinfo'][0]['url']
+    return urls
+
+
+def shop_item_names():
+    with urllib.request.urlopen(urllib.request.Request(ITEMS, headers=UA), timeout=60) as r:
+        return sorted({i['name'] for i in json.load(r) if i.get('type') == 'upgrade' and i.get('name')})
+
+
+def save_icon(url, dest):
+    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=60) as r:
+        im = Image.open(io.BytesIO(r.read())).convert('RGBA')
+    im.thumbnail((SIZE, SIZE), Image.LANCZOS)
+    square = Image.new('RGBA', (SIZE, SIZE))
+    square.alpha_composite(im, ((SIZE - im.width) // 2, (SIZE - im.height) // 2))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    square.save(dest, 'WEBP', quality=85, method=6)
+    time.sleep(0.1)  # be gentle with the wiki
+
+
+def key(name):
+    """The lookup key the frontend uses (`wikiKey` in wikiIcons.ts): lower case letters and digits only."""
+    return re.sub(r'[^a-z0-9]', '', name.lower())
+
+
+def slug(name):
+    return re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+
+
+def main():
+    items = {}
+    for title, url in sorted(category_files('Item_icons').items()):
+        name = re.sub(r'\s*\(item\)$', '', title.rsplit('.', 1)[0])
+        save_icon(url, OUT / 'items' / f'{slug(name)}.webp')
+        items[key(name)] = slug(name)
+    print(f'{len(items)} item icons from the category')
+
+    # Many current items have an icon named after them that isn't in the category. The current art is 200 px;
+    # smaller files with an item's name are old glyphs or other pictures, so those items keep deadlock-api's icon.
+    others = [n for n in shop_item_names() if key(n) not in items]
+    found = file_urls((f'{n}.png' for n in others), min_width=200)
+    for name in others:
+        if f'{name}.png' in found:
+            save_icon(found[f'{name}.png'], OUT / 'items' / f'{slug(name)}.webp')
+            items[key(name)] = slug(name)
+    print(f'{len(items)} item icons in all')
+
+    urls = file_urls(OBJECTIVES.values())
+    for kind, title in OBJECTIVES.items():
+        save_icon(urls[title], OUT / 'objectives' / f'{kind}.webp')
+    print(f'{len(OBJECTIVES)} objective icons')
+
+    lines = [
+        '// Generated by scripts/wiki_icons.py from the Deadlock Wiki (https://deadlock.wiki): do not edit by hand.',
+        '',
+        '/** Item name (see `wikiKey`) -> icon file in /icons/items/. */',
+        'export const ITEM_ICONS: Record<string, string> = {',
+        *[f"  {k}: '{v}'," for k, v in sorted(items.items())],
+        '};',
+        '',
+        '/** The lookup key of an item name: lower case letters and digits only. */',
+        'export function wikiKey(name: string): string {',
+        "  return name.toLowerCase().replace(/[^a-z0-9]/g, '');",
+        '}',
+        '',
+    ]
+    (ROOT / 'src' / 'lib' / 'wikiIcons.ts').write_text('\n'.join(lines), encoding='utf-8', newline='\n')
+
+
+if __name__ == '__main__':
+    main()
