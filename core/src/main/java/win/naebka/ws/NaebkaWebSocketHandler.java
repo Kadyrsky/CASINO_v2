@@ -1,5 +1,9 @@
 package win.naebka.ws;
 
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Set;
+import win.naebka.live.LiveViewPolicy;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Map;
@@ -35,17 +39,21 @@ import win.naebka.common.Json;
 public class NaebkaWebSocketHandler extends TextWebSocketHandler {
     private static final Logger log = LoggerFactory.getLogger(NaebkaWebSocketHandler.class);
     private static final Pattern PUBLIC_TOPIC = Pattern.compile("lobby|(match|poker|chat):[0-9a-f-]{36}");
+    private static final Pattern WATCH_TOPIC = Pattern.compile("watch:[0-9]{1,20}");
 
     private final Map<String, WsClient> clients = new ConcurrentHashMap<>();
     private final Map<UUID, Integer> connectionsPerUser = new ConcurrentHashMap<>();
     private final JwtDecoder jwtDecoder;
     private final WsHub hub;
     private final List<WsCommandHandler> commandHandlers;
+    private final LiveViewPolicy livePolicy;
 
-    public NaebkaWebSocketHandler(JwtDecoder jwtDecoder, WsHub hub, List<WsCommandHandler> commandHandlers) {
+    public NaebkaWebSocketHandler(JwtDecoder jwtDecoder, WsHub hub, List<WsCommandHandler> commandHandlers,
+                                  LiveViewPolicy livePolicy) {
         this.jwtDecoder = jwtDecoder;
         this.hub = hub;
         this.commandHandlers = commandHandlers;
+        this.livePolicy = livePolicy;
     }
 
     @Override
@@ -121,6 +129,10 @@ public class NaebkaWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void subscribe(WsClient client, String topic, long lastSeq) {
+        if (WATCH_TOPIC.matcher(topic).matches()) {
+            subscribeWatch(client, topic);
+            return;
+        }
         boolean ownUserTopic = client.userId() != null && topic.equals(WsHub.userTopic(client.userId()));
         if (!ownUserTopic && !PUBLIC_TOPIC.matcher(topic).matches()) {
             sendError(client, ErrorCode.FORBIDDEN, "Cannot subscribe to " + topic);
@@ -131,6 +143,41 @@ public class NaebkaWebSocketHandler extends TextWebSocketHandler {
             hub.replay(topic, lastSeq).forEach(client::sendRaw);
         }
         client.send(Map.of("type", "SUBSCRIBED", "topic", topic, "seq", hub.currentSeq(topic)));
+    }
+
+    /**
+     * {@code watch:{deadlockMatchId}}: realtime map frames of one live match. Only for viewers {@link LiveViewPolicy}
+     * allows; a refusal comes back on the topic itself ({@code WATCH_DENIED}), so the map can say why.
+     */
+    private void subscribeWatch(WsClient client, String topic) {
+        String matchId = topic.substring("watch:".length());
+        LiveViewPolicy.Decision d = livePolicy.check(client.userId(), matchId);
+        if (!d.allowed()) {
+            Map<String, Object> denied = new LinkedHashMap<>();
+            denied.put("topic", topic);
+            denied.put("seq", 0);
+            denied.put("type", "WATCH_DENIED");
+            denied.put("data", Map.of("reason", d.reason().name(), "minStakeTokens", d.minStakeTokens(),
+                    "stakedTokens", d.stakedTokens()));
+            client.send(denied);
+            return;
+        }
+        client.topics().add(topic);
+        livePolicy.markWanted(matchId);
+        client.send(Map.of("type", "SUBSCRIBED", "topic", topic, "seq", 0));
+    }
+
+    /** Topics with this prefix that at least one client on this instance is subscribed to. */
+    public Set<String> subscribedTopics(String prefix) {
+        Set<String> out = new HashSet<>();
+        for (WsClient c : clients.values()) {
+            for (String t : c.topics()) {
+                if (t.startsWith(prefix)) {
+                    out.add(t);
+                }
+            }
+        }
+        return out;
     }
 
     private void dispatch(WsClient client, String op, JsonNode msg) {

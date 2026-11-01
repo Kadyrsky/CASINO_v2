@@ -59,6 +59,9 @@ export interface Match {
   markets: Market[];
   chatRoomId: string | null;
   reviewReason: string | null;
+  /** Rosters, with names and rank badges where the watcher has them. */
+  players?: LivePlayer[];
+  meta?: { region?: string; match_mode?: number; game_mode?: number; match_score?: number };
 }
 
 export interface MatchEventView {
@@ -250,4 +253,130 @@ export interface EthStatus {
   withdrawMinTokens: number;
   withdrawMaxTokens: number;
   withdrawals: EthWithdrawal[];
+}
+
+// ---- Live matches page and realtime map (watcher directory, deadlock-bot frames) ----
+
+/** A player as the live directory knows them; name and badge are null until deadlock-api has them. */
+export interface LivePlayer {
+  account_id: number;
+  /** 0 = Hidden King (amber), 1 = Archmother (sapphire). */
+  team: 0 | 1;
+  hero_id: number;
+  name: string | null;
+  avatar: string | null;
+  /** Rank badge: tier * 10 + subrank (105 = Ascendant V). */
+  badge: number | null;
+}
+
+export type MatchMode = 'ranked' | 'unranked' | 'private' | 'bots' | 'placement' | 'other';
+export type GameMode = 'normal' | 'street_brawl' | 'other';
+
+/** One match of the in-game Watch tab (GET /api/live/directory). */
+export interface LiveMatchSummary {
+  match_id: string;
+  start_time: number;
+  elapsed_s: number;
+  match_mode: MatchMode;
+  game_mode: GameMode;
+  region: string | null;
+  spectators: number;
+  match_score: number;
+  net_worth: [number, number];
+  objectives_alive: [number, number];
+  winning_team: number | null;
+  team_badges: [number | null, number | null];
+  badge: number | null;
+  /** The watcher tracks it: it has betting markets. */
+  tracked: boolean;
+  players: LivePlayer[];
+}
+
+export interface LiveDirectory {
+  updated_at: number | null;
+  source: string | null;
+  total: number;
+  rank_spread: { tier: number; matches: number }[];
+  matches: LiveMatchSummary[];
+  /** Deadlock match id → our match id, for matches with markets. */
+  bettable: Record<string, string>;
+}
+
+export interface LiveAssets {
+  heroes: Record<string, { name: string; icon: string | null; minimap: string | null; color: [number, number, number] | null }>;
+  ranks: Record<string, { name: string; image: string | null; color: string | null }>;
+  items: Record<string, { name: string; image: string | null; tier: number | null; slot: string | null }>;
+  map: { radius: number; image: string | null; lanes: { color: string; points: [number, number][] }[] };
+}
+
+export interface WatchAccess {
+  allowed: boolean;
+  reason: 'ADMIN' | 'PREMIUM' | 'OPEN' | 'STAKE' | 'LOGIN_REQUIRED' | 'STAKE_REQUIRED';
+  minStakeTokens: number;
+  stakedTokens: number;
+}
+
+/** GET /api/live/matches/{deadlockMatchId} */
+export interface LiveMatchInfo {
+  match: LiveMatchSummary | null;
+  bettableMatchId: string | null;
+  watch: WatchAccess;
+}
+
+export interface FramePlayer {
+  slot: number;
+  account_id: number;
+  hero_id: number;
+  team: 0 | 1;
+  level: number;
+  net_worth: number;
+  kills: number;
+  deaths: number;
+  assists: number;
+  alive: boolean;
+  respawn_in_s: number | null;
+  ult_ready: boolean;
+  items: number[];
+  x: number | null;
+  y: number | null;
+  hp: number | null;
+  max_hp: number | null;
+}
+
+export type ObjectiveKind = 'guardian' | 'walker' | 'base_guardian' | 'patron' | 'patron_core' | 'midboss';
+
+export interface FrameObjective {
+  id: number;
+  kind: ObjectiveKind;
+  team: 0 | 1 | null;
+  lane: number | null;
+  x: number;
+  y: number;
+  hp: number;
+  max_hp: number;
+}
+
+export type FrameEvent =
+  | { type: 'kill'; time_s: number; victim: number; killer: number | null; assisters: number[] }
+  | { type: 'purchase'; time_s: number; account_id: number; item_id: number }
+  | { type: 'level_up'; time_s: number; account_id: number; level: number }
+  | { type: 'objective_destroyed'; time_s: number; kind: ObjectiveKind; team: 0 | 1 | null; lane: number | null };
+
+/** One realtime map frame (WebSocket topic watch:{deadlockMatchId}, type LIVE_FRAME), about twice a second. */
+export interface LiveFrame {
+  match_id: string;
+  tick: number;
+  game_time_s: number | null;
+  paused: boolean;
+  /** How far the broadcast runs behind the real game. */
+  delay_s: number;
+  /** Minimap world bounds: [minX, minY, maxX, maxY]. */
+  minimap: [number, number, number, number] | null;
+  objectives_mask: [number, number] | null;
+  net_worth: [number, number];
+  winning_team: number | null;
+  players: FramePlayer[];
+  objectives: FrameObjective[];
+  events: FrameEvent[];
+  received_at: number;
 }

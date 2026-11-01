@@ -35,11 +35,13 @@ public class MatchService {
     private final JdbcClient jdbc;
     private final WsHub ws;
     private final NaebkaProperties props;
+    private final PlayerDirectory playerDirectory;
 
-    public MatchService(JdbcClient jdbc, WsHub ws, NaebkaProperties props) {
+    public MatchService(JdbcClient jdbc, WsHub ws, NaebkaProperties props, PlayerDirectory playerDirectory) {
         this.jdbc = jdbc;
         this.ws = ws;
         this.props = props;
+        this.playerDirectory = playerDirectory;
     }
 
     public static String topic(UUID matchId) {
@@ -55,7 +57,13 @@ public class MatchService {
         }
         Optional<UUID> existing = findByExternalId(event.externalMatchId());
         if (MatchEvent.DISCOVERED.equals(event.type()) && existing.isPresent()) {
-            return; // the watcher re-announces tracked matches periodically; nothing new
+            // The watcher re-announces tracked matches periodically; only fill in a roster that is still missing.
+            JsonNode players = event.data().path("players");
+            if (players.isArray() && !players.isEmpty()) {
+                jdbc.sql("UPDATE matches SET players = ?::jsonb, meta = ?::jsonb WHERE id = ? AND players = '[]'::jsonb")
+                        .params(Json.write(players), Json.write(meta(event.data())), existing.get()).update();
+            }
+            return;
         }
         UUID matchId = MatchEvent.DISCOVERED.equals(event.type()) ? createIfAbsent(event) : existing.orElse(null);
         if (matchId == null) {
@@ -115,11 +123,13 @@ public class MatchService {
         }
         JsonNode d = event.data();
         Instant startsAt = d.has("start_time") ? Instant.ofEpochSecond(d.path("start_time").asLong()) : event.ts();
+        JsonNode players = d.path("players").isArray() ? d.path("players") : Json.read("[]");
         UUID matchId = jdbc.sql("""
-                INSERT INTO matches (game_id, external_id, status, starts_at, state)
-                SELECT id, ?, 'LIVE', ?, ?::jsonb FROM games WHERE code = 'deadlock'
+                INSERT INTO matches (game_id, external_id, status, starts_at, state, players, meta)
+                SELECT id, ?, 'LIVE', ?, ?::jsonb, ?::jsonb, ?::jsonb FROM games WHERE code = 'deadlock'
                 RETURNING id""")
-                .params(event.externalMatchId(), java.sql.Timestamp.from(startsAt), Json.write(d.path("state")))
+                .params(event.externalMatchId(), java.sql.Timestamp.from(startsAt), Json.write(d.path("state")),
+                        Json.write(players), Json.write(meta(d)))
                 .query(UUID.class).single();
         jdbc.sql("""
                 INSERT INTO match_participants (match_id, team_id, side)
@@ -140,6 +150,20 @@ public class MatchService {
         ws.publish("lobby", "MATCH_ADDED", Map.of("matchId", matchId, "externalId", event.externalMatchId()));
         log.info("Discovered Deadlock match {} -> {}", event.externalMatchId(), matchId);
         return matchId;
+    }
+
+    /** What the match page shows about a match besides its state: region, mode and Valve's rank score. */
+    private static Map<String, Object> meta(JsonNode d) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        for (String key : List.of("region", "match_mode", "game_mode", "match_score")) {
+            JsonNode v = d.path(key);
+            if (v.isTextual() && !v.asText().isEmpty()) {
+                m.put(key, v.asText());
+            } else if (v.isNumber()) {
+                m.put(key, v.asLong());
+            }
+        }
+        return m;
     }
 
     private UUID insertMarket(UUID matchId, String type, String name, BigDecimal line) {
@@ -310,9 +334,14 @@ public class MatchService {
     public record MarketView(UUID id, String marketType, String name, String status, BigDecimal line,
                              String suspendReason, long priceVersion, List<SelectionView> selections) {}
 
+    /**
+     * {@code players}: [{account_id, team (0/1), hero_id, name, avatar, badge}], names and badges where the watcher has
+     * them; {@code meta}: region, match_mode, game_mode, match_score.
+     */
     public record MatchView(UUID id, String externalId, String game, String status, Instant startsAt,
                             Instant endedAt, JsonNode state, List<Map<String, Object>> teams,
-                            List<MarketView> markets, UUID chatRoomId, String reviewReason) {}
+                            List<MarketView> markets, UUID chatRoomId, String reviewReason,
+                            List<Map<String, Object>> players, JsonNode meta) {}
 
     public List<MarketView> marketsOf(UUID matchId) {
         List<MarketView> markets = jdbc.sql("""
@@ -335,13 +364,15 @@ public class MatchService {
     public Optional<MatchView> view(UUID matchId) {
         return jdbc.sql("""
                 SELECT m.id, m.external_id, g.code, m.status, m.starts_at, m.ended_at, m.state::text,
-                       (SELECT id FROM chat_rooms WHERE match_id = m.id) AS room, m.review_reason
+                       (SELECT id FROM chat_rooms WHERE match_id = m.id) AS room, m.review_reason,
+                       m.players::text, m.meta::text
                 FROM matches m JOIN games g ON g.id = m.game_id WHERE m.id = ?""")
                 .param(matchId)
                 .query((rs, i) -> new MatchView(rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3),
                         rs.getString(4), rs.getTimestamp(5).toInstant(),
                         rs.getTimestamp(6) == null ? null : rs.getTimestamp(6).toInstant(), Json.read(rs.getString(7)),
-                        teams(matchId), marketsOf(matchId), rs.getObject(8, UUID.class), rs.getString(9)))
+                        teams(matchId), marketsOf(matchId), rs.getObject(8, UUID.class), rs.getString(9),
+                        playerDirectory.enrich(Json.read(rs.getString(10))), Json.read(rs.getString(11))))
                 .optional();
     }
 

@@ -77,6 +77,24 @@ public class WsHub {
         }
     }
 
+    /**
+     * For high-rate data that is only useful while fresh (realtime map frames): no replay buffer and no Redis
+     * counter. The time in milliseconds serves as the sequence number, so the client's ordering check still works.
+     */
+    public void publishTransient(String topic, String type, Object data) {
+        try {
+            Map<String, Object> envelope = new LinkedHashMap<>();
+            envelope.put("topic", topic);
+            envelope.put("seq", System.currentTimeMillis());
+            envelope.put("ts", Instant.now().toString());
+            envelope.put("type", type);
+            envelope.put("data", data);
+            redis.convertAndSend(CHANNEL, Json.write(envelope));
+        } catch (RuntimeException e) {
+            log.debug("WS transient publish to {} failed: {}", topic, e.getMessage());
+        }
+    }
+
     public long currentSeq(String topic) {
         String v = redis.opsForValue().get("ws:seq:" + topic);
         return v == null ? 0 : Long.parseLong(v);

@@ -21,7 +21,16 @@ public record NaebkaProperties(
         Poker poker,
         DeadlockApi deadlockApi,
         DeadlockBot deadlockBot,
-        Eth eth) {
+        Eth eth,
+        LiveView liveView) {
+
+    /**
+     * Who may watch the realtime map of a live match: admins and premium players always; others once they have at
+     * least {@code minStakeTokens} staked on that match (0 = every logged-in player). Frames reach viewers
+     * {@code delaySeconds} after the core received them, so markets are suspended before anyone sees the event that
+     * suspended them.
+     */
+    public record LiveView(long minStakeTokens, int delaySeconds) {}
 
     public enum CurrencyMode { PLAY_MONEY, REAL_MONEY }
 

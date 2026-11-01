@@ -2,8 +2,10 @@
 //! Results go to stdout as JSON; messages and errors go to stderr.
 
 mod auth;
+mod feeds;
 mod gc;
 mod guard;
+mod live;
 mod matches;
 mod server;
 
@@ -58,6 +60,14 @@ enum Command {
         #[arg(long)]
         save: Option<PathBuf>,
     },
+    /// Print live map frames (JSON lines) from a match's broadcast URL, for testing the live feed.
+    Live {
+        /// Broadcast URL, e.g. from `spectate` or deadlock-api's /v1/matches/live/urls.
+        broadcast_url: String,
+        /// Stop after this many seconds.
+        #[arg(long, default_value_t = 30)]
+        seconds: u64,
+    },
     /// Stay logged in and answer HTTP requests with the same JSON as deadlock-api, so the website
     /// can fall back to the bot when deadlock-api says "too many requests".
     Serve {
@@ -70,6 +80,15 @@ enum Command {
         /// Close the Steam session after this many minutes without requests.
         #[arg(long, env = "DEADLOCK_BOT_IDLE_MINUTES", default_value_t = 15)]
         idle_minutes: u64,
+        /// Redis for the live map feeds (frames for the website). Leave out to run without feeds.
+        #[arg(long, env = "REDIS_URL")]
+        redis_url: Option<String>,
+        /// Most broadcasts followed at once (each uses about one CPU core at 5% and 30 MB).
+        #[arg(long, env = "DEADLOCK_BOT_MAX_FEEDS", default_value_t = 12)]
+        max_feeds: usize,
+        /// Where deadlock-api's public list of broadcast URLs lives.
+        #[arg(long, env = "DEADLOCK_API_BASE_URL", default_value = "https://api.deadlock-api.com")]
+        deadlock_api: String,
     },
 }
 
@@ -93,9 +112,31 @@ async fn run(cli: Cli) -> Result<()> {
         listen,
         token,
         idle_minutes,
+        redis_url,
+        max_feeds,
+        deadlock_api,
     } = cli.command
     {
-        return server::serve(listen, token, Duration::from_secs(idle_minutes.max(1) * 60)).await;
+        let feeds = redis_url.filter(|u| !u.is_empty()).map(|redis_url| feeds::Config {
+            redis_url,
+            max_feeds,
+            every_ticks: 32,
+            deadlock_api,
+        });
+        return server::serve(listen, token, Duration::from_secs(idle_minutes.max(1) * 60), feeds).await;
+    }
+    if let Command::Live { broadcast_url, seconds } = &cli.command {
+        let match_id = live::match_id_from_url(broadcast_url).unwrap_or_default();
+        let feed = live::follow(broadcast_url, match_id, 32, |frames| {
+            for f in frames {
+                println!("{}", serde_json::to_string(&f).unwrap_or_default());
+            }
+            true
+        });
+        return match tokio::time::timeout(Duration::from_secs(*seconds), feed).await {
+            Ok(result) => result,
+            Err(_) => Ok(()), // time is up
+        };
     }
 
     let http = reqwest::Client::builder()
@@ -151,7 +192,7 @@ async fn run(cli: Cli) -> Result<()> {
             gc.close().await;
             print_json(&out?)?;
         }
-        Command::Serve { .. } => unreachable!("handled above"),
+        Command::Serve { .. } | Command::Live { .. } => unreachable!("handled above"),
     }
     Ok(())
 }

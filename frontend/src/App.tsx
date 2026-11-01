@@ -9,6 +9,7 @@ import Lobby from './pages/Lobby';
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
 const MatchPage = lazy(() => import('./pages/Match'));
+const LiveMatchPage = lazy(() => import('./pages/LiveMatch'));
 const Bets = lazy(() => import('./pages/Bets'));
 const WalletPage = lazy(() => import('./pages/Wallet'));
 const Slots = lazy(() => import('./pages/Slots'));
@@ -29,6 +30,7 @@ export default function App() {
         <Route path="/login" component={Login} />
         <Route path="/register" component={Register} />
         <Route path="/matches/:id" component={MatchPage} />
+        <Route path="/live/:id" component={LiveMatchPage} />
         <Route path="/bets" component={() => <RequireAuth><Bets /></RequireAuth>} />
         <Route path="/wallet" component={() => <RequireAuth><WalletPage /></RequireAuth>} />
         <Route path="/verification" component={() => <RequireAuth><Verification /></RequireAuth>} />

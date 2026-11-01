@@ -43,6 +43,9 @@ services:
       # Harmless when the bot isn't running: the request just fails and settlement waits as before.
       NAEBKA_DEADLOCK_BOT_BASE_URL: ${DEADLOCK_BOT_URL:-http://deadlock-bot:8090}
       NAEBKA_DEADLOCK_BOT_TOKEN: ${DEADLOCK_BOT_TOKEN:-}
+      # Realtime map: admins and premium players always; others with this many tokens staked on the match.
+      NAEBKA_LIVE_VIEW_MIN_STAKE_TOKENS: ${LIVE_VIEW_MIN_STAKE_TOKENS:-100}
+      NAEBKA_LIVE_VIEW_DELAY_SECONDS: ${LIVE_VIEW_DELAY_SECONDS:-5}
       # MetaMask + Sepolia deposits: off while NAEBKA_ETH_CONTRACT_ADDRESS is empty.
       NAEBKA_ETH_CONTRACT_ADDRESS: ${NAEBKA_ETH_CONTRACT_ADDRESS:-}
       NAEBKA_ETH_DEPLOY_BLOCK: ${NAEBKA_ETH_DEPLOY_BLOCK:-0}
@@ -85,7 +88,13 @@ services:
     environment:
       DEADLOCK_BOT_TOKEN: ${DEADLOCK_BOT_TOKEN:-}
       RUST_LOG: ${DEADLOCK_BOT_LOG:-warn,deadlock_bot=info}
+      # Live map feeds: the bot follows the broadcasts of tracked matches and of matches viewers have open.
+      REDIS_URL: redis://redis:6379/0
+      DEADLOCK_API_BASE_URL: ${DEADLOCK_API_BASE_URL:-https://api.deadlock-api.com}
+      DEADLOCK_BOT_MAX_FEEDS: ${DEADLOCK_BOT_MAX_FEEDS:-12}
     volumes: [botdata:/data]
+    depends_on:
+      redis: { condition: service_healthy }
 
   # Heuristic odds engine: consumes match events, publishes odds updates.
   odds-engine:

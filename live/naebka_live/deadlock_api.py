@@ -133,6 +133,11 @@ class DeadlockApi:
 
     def active_matches(self, account_id: int | None = None) -> list[ActiveMatch]:
         """Top ~200 live matches (the in-game Watch tab), or the live match of one player."""
+        wall = time.time()
+        return [parse_active_match(m, wall) for m in self.active_matches_raw(account_id)]
+
+    def active_matches_raw(self, account_id: int | None = None) -> list[dict[str, Any]]:
+        """The same, as deadlock-api's JSON objects (every field, for the live directory)."""
         params = {"account_id": str(account_id)} if account_id is not None else None
         problems: list[str] = []
         for source in self._sources:
@@ -159,8 +164,7 @@ class DeadlockApi:
                 problems.append(f"{source.name}: unexpected response shape")
                 continue
             self._answered_by(source.name)
-            wall = time.time()
-            return [parse_active_match(m, wall) for m in body if isinstance(m, dict) and "match_id" in m]
+            return [m for m in body if isinstance(m, dict) and "match_id" in m]
 
         message = "; ".join(problems) or "no source configured"
         if account_id is not None:

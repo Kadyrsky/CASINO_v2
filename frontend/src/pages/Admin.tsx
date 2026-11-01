@@ -16,6 +16,8 @@ interface Health {
   deadlockBotBreaker: 'CLOSED' | 'OPEN' | 'HALF_OPEN' | 'OFF';
   /** Where the watcher got its last live match list. */
   watcherSource: 'deadlock-api' | 'deadlock-bot' | null;
+  /** Broadcasts the Steam bot follows for the realtime map; null when its feeds are off. */
+  liveFeeds: { max: number; feeds: { match_id: string; frames: number; running_s: number }[] } | null;
   matchesByStatus: Record<string, number>;
   ledgerDrift: { walletId: string; balance: number; ledger: number }[];
 }
@@ -138,7 +140,9 @@ export default function Admin() {
           <Stat
             label="Deadlock API breaker"
             value={<Badge tone={health.data?.deadlockApiBreaker === 'CLOSED' ? 'win' : 'loss'}>{health.data?.deadlockApiBreaker ?? '…'}</Badge>}
-            sub={`Steam bot fallback: ${health.data?.deadlockBotBreaker ?? '…'}`}
+            sub={`Steam bot fallback: ${health.data?.deadlockBotBreaker ?? '…'} · live map feeds: ${
+              health.data?.liveFeeds ? `${health.data.liveFeeds.feeds.length}/${health.data.liveFeeds.max}` : 'off'
+            }`}
           />
         </Card>
         <Card class="p-4">

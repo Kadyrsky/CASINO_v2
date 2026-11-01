@@ -14,6 +14,7 @@ directories = "6"
 env_logger = "0.11.10"
 log = "0.4.29"
 prost = "0.14.3"
+redis = { version = "1.8", default-features = false, features = ["tokio-comp", "connection-manager"] }
 reqwest = { version = "0.13.3", default-features = false, features = ["json", "rustls"] }
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }
@@ -22,6 +23,11 @@ snap = "1"
 tracing = { version = "0.1", features = ["log"] }
 tokio = { version = "1.52.3", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 zstd = "0.13"
+
+# Broadcast parser for the live map (BSD-3-Clause). It brings its own reqwest 0.12, which its HTTP client trait is
+# implemented for, so that version is named here too.
+haste = { git = "https://github.com/blukai/haste", rev = "d2cdbf2cc13cadf12ec6c6b765f689a5894a6b36", features = ["broadcast", "deadlock"] }
+reqwest012 = { package = "reqwest", version = "0.12", default-features = false, features = ["gzip"] }
 
 # Same pins as deadlock-api's own tools (deadlock-api-ingest), so the Steam and GC code matches theirs.
 steam-vent = { git = "https://github.com/deadlock-api/steam-vent", rev = "098ae675ab698d642e93c4c650cab79f3fc7d130" }

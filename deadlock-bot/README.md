@@ -11,6 +11,7 @@ It is based on deadlock-api's open-source [public-ingest](https://github.com/dea
 | `spectate <match_id>` | Prints the live broadcast URL of a match that is being played now | 5 minutes |
 | `result <match_id>` | Prints the official result of a finished match: winner, duration, each player's K/D/A | 1 minute |
 | `serve` | Stays logged in and answers HTTP requests with deadlock-api's JSON, for the website's fallback ([below](#server-mode-serve)) | same waits, per request |
+| `live <broadcast_url>` | Prints realtime map frames (JSON lines) from a match's broadcast, for testing the live feed | none (no Steam login needed) |
 | `logout` | Deletes the saved login token | none |
 
 Add `--force` to skip the wait. The waits are there so the account doesn't look like a bot hammering Valve. deadlock-api's own bots wait longer: about 10 minutes between live lists and 29 minutes between spectates per account.
@@ -107,6 +108,23 @@ Status codes, chosen so deadlock-api clients handle them already:
 * `502`: anything else went wrong; the next request opens a new Steam session.
 
 Set `DEADLOCK_BOT_TOKEN` to require `Authorization: Bearer <token>` on every route except `/healthz`. The server has no TLS: keep it on a private network (Docker Compose does), or behind a TLS tunnel with the token set.
+
+### Live map feeds
+
+With `REDIS_URL` set, `serve` also follows match broadcasts for the website's realtime map (`src/feeds.rs`):
+the watcher's tracked matches first, then any match a viewer has open, up to `DEADLOCK_BOT_MAX_FEEDS` (12). Each
+broadcast is read by the [haste](https://github.com/blukai/haste) parser on its own thread (`src/live.rs`) and
+sampled twice a second into a frame: every hero's position, health, level, souls, K/D/A, items and ultimate, the
+objectives still standing, and kill, purchase, level-up and objective events. Frames go to Redis (`live:frame:{id}`
+and the channel `naebka:live-frames`).
+
+Broadcast URLs come from deadlock-api's public list (`/v1/matches/live/urls`). Only matches missing from it are
+spectated with the bot account, within the 5-minute spectate wait. One feed uses about 30 MB and a few percent of
+a CPU core.
+
+Two things learned from live broadcasts: Deadlock's position grid is now 128 × 128 cells of 512 units, so the origin
+is at cell 64 (haste's helper still assumes 64 × 64); and Valve sends the objective bitmasks only when they change, so
+a feed that joins mid-match has none until the next objective falls (the watcher keeps the live list's until then).
 
 ### Docker
 
