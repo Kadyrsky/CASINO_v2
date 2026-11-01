@@ -30,6 +30,78 @@ Live matches appear within ~10 s: the watcher picks fresh ranked games from `api
 The admin account (manual-review queue and integrity dashboard at `/admin`) comes from `.env.example`
 (`NAEBKA_ADMIN_USERNAME` / `NAEBKA_ADMIN_PASSWORD`). Copy it to `.env` to change values.
 
+## MetaMask + Sepolia deposits (web3)
+
+Players can connect MetaMask and deposit **Sepolia test ETH** to get play tokens (0.001 ETH = 100 NTK by default).
+Sepolia ETH has no value, so the platform stays in `PLAY_MONEY` mode. It follows the course web3 lab: the same
+Remix settings, the Sepolia chain check (11155111 / `0xaa36a7`), and the connection safeguards from the lab's
+`shared/wallet.js` (ported to `frontend/src/lib/eth.ts`).
+
+The feature is off until a cashier contract address is configured.
+
+### 1. Deploy the contract (once, from Remix)
+
+1. Open `contracts/NaebkaCashier.sol` in [Remix](https://remix.ethereum.org). Compiler **0.8.24**, optimiser on,
+   **200 runs**, EVM **Shanghai**.
+2. Test in Remix VM first: `deposit` with Value 0.001 ether works; Value 0 or 1 ether reverts `AmountOutOfRange`;
+   `payout` from a second account reverts `OnlyOwner`.
+3. Switch the environment to **Browser Extension** (MetaMask on Sepolia) and deploy with **Value = 0**. The deploying
+   account becomes `owner`.
+4. Copy the contract address from *Deployed Contracts* (not the account address or the transaction hash), and the
+   block number of the deployment transaction from Etherscan.
+
+### 2. Configure and start
+
+```bash
+cp .env.example .env
+# set NAEBKA_ETH_CONTRACT_ADDRESS=0x... and NAEBKA_ETH_DEPLOY_BLOCK=<block>
+docker compose up --build
+```
+
+Optional: `NAEBKA_ETH_RPC_URL` (default: the public `ethereum-sepolia-rpc.publicnode.com`; an Infura or Alchemy Sepolia
+URL is more reliable), `NAEBKA_ETH_TOKENS_PER_ETH`, `NAEBKA_ETH_CONFIRMATIONS` (default 3).
+If players open the site at an address other than `http://localhost:8080`, set `NAEBKA_ETH_SIWE_DOMAIN` and
+`NAEBKA_ETH_SIWE_URI` to match, or MetaMask warns that the sign-in message is for another site.
+
+### 3. Play
+
+Wallet page → **Sepolia test ETH** card:
+
+1. **Connect MetaMask** (switch to Sepolia if asked).
+2. **Link this address**: MetaMask asks you to sign a Sign-In with Ethereum message. Signing is free and sends no
+   transaction; it proves you hold the key, so nobody can link your address to their account.
+3. **Deposit**: approve the transaction. The Etherscan link appears as soon as it is submitted. The core credits the
+   tokens once the block is 3 confirmations deep (about a minute).
+
+How it works:
+
+* `eth/EthDepositPoller` polls `eth_getLogs` for `Deposited` events. It saves the events of a block range and its
+  "last processed block" cursor in one database transaction, so after a crash the range is read again and the
+  unique (chain, tx, log index) key turns the repeat into a no-op. It deliberately does not use Redis pub/sub,
+  which drops messages while the core is down.
+* `eth/EthDepositService` credits through `WalletService` with the idempotency key
+  `deposit:eth:<chain>:<tx>:<logIndex>`, so the append-only ledger, responsible-gambling limits and the KYC deposit
+  cap all apply (the `deposit:` prefix is what the KYC cap counts). A deposit from an address nobody has linked
+  waits as `unlinked` and is credited when someone links it. A deposit over a deposit limit or the unverified KYC
+  cap, during self-exclusion, or above the max single deposit is `held`. The ETH is already on chain, so it is kept,
+  never refused.
+* Admins see unlinked and held deposits and the poller status at `GET /api/admin/eth`, and can re-run the checks with
+  `POST /api/admin/eth/deposits/{id}/retry` (for example after the player is KYC-verified).
+* Withdrawals to MetaMask are not built yet. The contract already has an owner-only `payout()` for that later step.
+
+Lab-style test (accounts A and B in MetaMask, both with Sepolia ETH):
+
+| Step | Account | Action | Expected |
+|---|---|---|---|
+| 1 | A | Connect, link, deposit 0.001 ETH | +100 NTK after ~1 min, status `credited` |
+| 2 | B | Deposit from Remix without linking | Status `unlinked` (admin view), no tokens |
+| 3 | B | Log in as a second user, link B | The waiting deposit is credited at once |
+| 4 | A | Deposit 0.00001 ETH | MetaMask/Remix rejects: `AmountOutOfRange` |
+| 5 | B | `payout` in Remix | `OnlyOwner` |
+| 6 | A | Set a 1 NTK daily deposit limit, deposit 0.001 ETH | Status `held` with the limit reason |
+| 7 | A | Link A to the second user too | `ADDRESS_TAKEN` |
+| 8 | A | New unverified user (no limits), link A, deposit 0.03 ETH (3,000 NTK) | `held`: over the 2,000 NTK KYC cap; after KYC verification an admin retry credits it |
+
 ## Architecture
 
 ```mermaid
@@ -103,9 +175,10 @@ Germany, Hungary, Montenegro, Slovenia, Portugal, Belgium, Ireland, Bulgaria, Gr
 ## Tests
 
 ```bash
-# Java: 47 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules)
+# Java: 57 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules,
+# Ethereum signatures and deposit-log parsing)
 cd core && mvn test
-# + 21 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
+# + 27 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
 cd core && mvn -Pit test
 
 # Python: 21 tests, mypy --strict
@@ -147,6 +220,7 @@ settle" via the scripted `MatchSimulator`):
 | WebSocket `{topic, seq, ts, data}` with `lastSeq` resume | `ws/WsHub.java`, `ws/NaebkaWebSocketHandler.java`, `frontend/src/lib/ws.ts` |
 | Responsible gambling (Risk #4) | `wallet/ResponsibleGamingService.java`: deposit/wager/loss limits, 24 h cooling-off on increases, self-exclusion |
 | KYC: hybrid auto + manual verification, tiered limits (Risk #5) | `kyc/*`, `db/migration/V3__kyc.sql`, `V4__profile_changes.sql`, `frontend/src/pages/Verification.tsx`, KYC queue in `/admin` |
+| MetaMask + Sepolia deposits (course web3 lab) | `contracts/NaebkaCashier.sol`, `eth/*`, `db/migration/V5__eth.sql`, `frontend/src/lib/eth.ts`, `frontend/src/components/EthWallet.tsx` |
 | CURRENCY_MODE compliance gate (Risk #13) | `config/CurrencyModeGuard.java`: REAL_MONEY refuses to start without the license sign-off file |
 | Frontend stack (Vite+, SolidJS, TS, Tailwind, TanStack, openapi-typescript, component registry) | `frontend/`; API types generated into `src/api/schema.d.ts` (`npm run gen:api`), shared components in `src/components/ui.tsx` |
 
@@ -157,7 +231,7 @@ Where the documents disagreed or left things open, this is what was built and wh
 | Topic | Documents say | Built | Why |
 |---|---|---|---|
 | Odds model | LLD: pari-mutuel; Technical Design: heuristic fixed odds | Heuristic fixed odds with suspend-then-reprice | Matches the architecture and risk docs (courtsiding defense needs fixed prices) |
-| Payments | Architecture: PSP webhooks; DB: Bitcoin; DoD: play money | Play-money deposit/withdraw endpoints; `btc_payments` table exists but is unused | No licence; the DoD milestone is play money |
+| Payments | Architecture: PSP webhooks; DB: Bitcoin; DoD: play money | Play-money deposit/withdraw endpoints, plus Sepolia test-ETH deposits through MetaMask (`eth/*`, `contracts/`); `btc_payments` table exists but is unused | No licence; the DoD milestone is play money, and Sepolia ETH has no value |
 | Login | Steam OpenID + email/password | Username/password + JWT; `/api/auth/steam` returns 501 | Steam needs a public return URL; insider-betting check (`BETTOR_IS_PARTICIPANT`) depends on it |
 | Games | CS2 + Deadlock | Deadlock only; `cs2` row exists, inactive | Only Deadlock has a data source |
 | Watcher fleet | Supervisor + many watchers | One watcher process + core watchdogs (STALE, heartbeat) | MVP scale (≤ 8 matches); same event contract, so it can be split later |
@@ -171,6 +245,7 @@ Where the documents disagreed or left things open, this is what was built and wh
 
 * Real-money rails (PSP, real KYC vendor and document-photo checks, AML transaction monitoring, geo-IP checks,
   withdrawal review queue) — the compliance gate blocks REAL_MONEY.
+* Sepolia withdrawals to MetaMask (the contract's `payout()` exists; the core does not call it yet).
 * Steam OpenID, 2FA, insider-betting cross-check.
 * Reality-check reminders, first-withdrawal delay, chargeback / negative-balance policy (Risk #12).
 * Kubernetes deployment, load tests, SonarQube/CI pipeline.

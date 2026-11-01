@@ -1,6 +1,7 @@
 import { A, useNavigate, type RouteSectionProps } from '@solidjs/router';
 import { createSignal, For, Show } from 'solid-js';
 import { auth } from '../lib/auth';
+import { eth, shortAddress } from '../lib/eth';
 import { appConfig, fiat, tokens } from '../lib/format';
 import { wallet } from '../lib/wallet';
 import { hub } from '../lib/ws';
@@ -71,6 +72,18 @@ export default function Layout(props: RouteSectionProps) {
           >
             {(user) => (
               <div class="relative flex shrink-0 items-center gap-2">
+                <Show when={eth.account()}>
+                  {(a) => (
+                    <A
+                      href="/wallet#sepolia"
+                      title={`MetaMask: ${a()} on Sepolia`}
+                      class="tabular hidden items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-ink-300 ring-1 ring-ink-700 hover:bg-ink-850 md:flex"
+                    >
+                      <span class="size-1.5 rounded-full bg-win" />
+                      {shortAddress(a())}
+                    </A>
+                  )}
+                </Show>
                 <A
                   href="/wallet"
                   class={`tabular hidden flex-col items-end rounded-lg px-3 py-1 leading-tight ring-1 ring-ink-700 transition-colors sm:flex ${wallet.flash() === 'up' ? 'animate-flash-up' : wallet.flash() === 'down' ? 'animate-flash-down' : ''}`}

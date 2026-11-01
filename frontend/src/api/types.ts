@@ -209,3 +209,27 @@ export interface PokerPrivateState {
   sittingOut?: boolean;
   legalActions?: LegalActions;
 }
+
+/** One Deposited event from the Sepolia cashier contract, as the core sees it. */
+export interface EthDeposit {
+  id: string;
+  txHash: string;
+  fromAddress: string;
+  amountEth: string;
+  amountTokens: number | null;
+  status: 'credited' | 'unlinked' | 'held';
+  holdReason: string | null;
+  blockNumber: number;
+  createdAt: string;
+}
+
+/** GET /api/wallet/eth: MetaMask + Sepolia settings and this player's link and deposits. */
+export interface EthStatus {
+  enabled: boolean;
+  chainId: number;
+  contractAddress: string | null;
+  tokensPerEth: number;
+  confirmations: number;
+  linkedAddress: string | null;
+  deposits: EthDeposit[];
+}

@@ -19,7 +19,8 @@ public record NaebkaProperties(
         Betting betting,
         Settlement settlement,
         Poker poker,
-        DeadlockApi deadlockApi) {
+        DeadlockApi deadlockApi,
+        Eth eth) {
 
     public enum CurrencyMode { PLAY_MONEY, REAL_MONEY }
 
@@ -45,4 +46,17 @@ public record NaebkaProperties(
                         int minBuyInBigBlinds, int maxBuyInBigBlinds, boolean blockSameIp) {}
 
     public record DeadlockApi(String baseUrl, int timeoutSeconds) {}
+
+    /**
+     * MetaMask + Sepolia deposits. Off until {@code contractAddress} is set (deploy contracts/NaebkaCashier.sol first).
+     * {@code siweDomain}/{@code siweUri} must be the address players open in the browser, or MetaMask warns that the
+     * sign-in message is for another site.
+     */
+    public record Eth(long chainId, String rpcUrl, String contractAddress, long deployBlock, int confirmations,
+                      int pollSeconds, int maxBlockRange, BigDecimal tokensPerEth, String siweDomain, String siweUri,
+                      int linkMessageTtlSeconds) {
+        public boolean configured() {
+            return contractAddress != null && !contractAddress.isBlank();
+        }
+    }
 }

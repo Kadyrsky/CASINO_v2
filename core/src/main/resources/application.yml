@@ -85,3 +85,22 @@ naebka:
   deadlock-api:
     base-url: https://api.deadlock-api.com
     timeout-seconds: 10
+  # MetaMask + Sepolia deposits (course web3 lab). Sepolia ETH is test money, so this stays PLAY_MONEY.
+  eth:
+    chain-id: 11155111
+    rpc-url: https://ethereum-sepolia-rpc.publicnode.com
+    # Empty = feature off. Set NAEBKA_ETH_CONTRACT_ADDRESS to the NaebkaCashier address deployed from Remix.
+    contract-address: ""
+    # Block the contract was deployed in (Etherscan shows it). 0 = start near the current block.
+    deploy-block: 0
+    # Blocks to wait before crediting: inclusion in one block is not finality.
+    confirmations: 3
+    poll-seconds: 15
+    # Blocks per eth_getLogs call; public RPCs reject large ranges.
+    max-block-range: 500
+    # 0.001 Sepolia ETH = 100 NTK
+    tokens-per-eth: 100000
+    # Must match the address players open, or MetaMask warns about the sign-in message.
+    siwe-domain: localhost:8080
+    siwe-uri: http://localhost:8080
+    link-message-ttl-seconds: 300
