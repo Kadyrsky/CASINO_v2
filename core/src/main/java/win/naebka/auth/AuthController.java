@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -40,6 +41,8 @@ public class AuthController {
             @NotBlank @Size(min = 8, max = 72) String password,
             @NotNull @Past LocalDate dateOfBirth,
             @NotBlank @Size(min = 2, max = 2) String country) {}
+
+    public record ProfileRequest(@NotNull @Past LocalDate dateOfBirth, @NotBlank @Size(min = 2, max = 2) String country) {}
 
     public record LoginRequest(@NotBlank String username, @NotBlank String password) {}
 
@@ -76,6 +79,11 @@ public class AuthController {
     @GetMapping("/me")
     public AuthService.UserView me() {
         return auth.me(AuthUser.current());
+    }
+
+    @PutMapping("/me")
+    public AuthService.UserView updateProfile(@Valid @RequestBody ProfileRequest req) {
+        return auth.updateProfile(AuthUser.current().id(), req.dateOfBirth(), req.country());
     }
 
     @GetMapping("/sessions")

@@ -2,6 +2,7 @@ package win.naebka.auth;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -56,6 +57,28 @@ public class UserRepository {
                 VALUES (?, ?, ?, ?, ?, ?) RETURNING id""")
                 .params(username, email, passwordHash, role, dob, country)
                 .query(UUID.class).single();
+    }
+
+    public record ProfileChange(String field, String oldValue, String newValue, Instant changedAt) {}
+
+    public void updateProfile(UUID id, LocalDate dob, String country) {
+        jdbc.sql("UPDATE users SET date_of_birth = ?, country = ?, updated_at = now() WHERE id = ?")
+                .params(dob, country, id).update();
+    }
+
+    public void recordProfileChange(UUID id, String field, String oldValue, String newValue) {
+        jdbc.sql("INSERT INTO profile_changes (user_id, field, old_value, new_value) VALUES (?, ?, ?, ?)")
+                .params(id, field, oldValue, newValue).update();
+    }
+
+    public List<ProfileChange> profileChangesSince(UUID id, Instant since) {
+        return jdbc.sql("""
+                SELECT field, old_value, new_value, changed_at FROM profile_changes
+                WHERE user_id = ? AND changed_at >= ? ORDER BY changed_at DESC""")
+                .params(id, java.sql.Timestamp.from(since))
+                .query((rs, i) -> new ProfileChange(rs.getString(1), rs.getString(2), rs.getString(3),
+                        rs.getTimestamp(4).toInstant()))
+                .list();
     }
 
     public void recordFailedLogin(UUID id, int maxFailed, int lockoutMinutes) {

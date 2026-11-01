@@ -44,7 +44,15 @@ naebka:
     password: admin12345
   registration:
     min-age: 18
-    licensed-countries: [CZ, SK, DE, AT, PL, GB, IE, NL, EE, LV, LT, FI, SE, DK, MT, CY]
+    # ISO 3166-1 alpha-2 (United Kingdom = GB, Greece = GR, North Macedonia = MK, Montenegro = ME).
+    licensed-countries: [GB, MT, SE, DK, CZ, NL, HR, EE, IT, LV, CH, RO, ES, LT, MK, DE, HU, ME, SI, PT, BE, IE, BG, GR, RS, SK]
+  kyc:
+    # Until VERIFIED: no withdrawals, and lifetime deposits (signup bonus excluded) are capped at this.
+    unverified-deposit-cap-tokens: 2000
+    # A KYC submission within this many days of a date-of-birth/country change goes to manual review.
+    profile-change-review-days: 30
+    # HMAC key for document-number hashes (duplicate detection without storing the number).
+    document-hash-key: dev-only-kyc-key-change-me
   auth:
     max-failed-logins: 5
     lockout-minutes: 15

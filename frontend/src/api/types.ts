@@ -89,6 +89,42 @@ export interface AppConfig {
   licensedCountries: string[];
 }
 
+export type KycStatus = 'NONE' | 'PENDING' | 'VERIFIED' | 'REJECTED';
+
+export interface KycCheck {
+  check: string;
+  outcome: 'PASS' | 'REVIEW' | 'FAIL';
+  message: string;
+}
+
+export interface KycSubmission {
+  id: string;
+  userId: string;
+  username: string;
+  firstName: string;
+  lastName: string;
+  dateOfBirth: string;
+  documentType: 'PASSPORT' | 'ID_CARD' | 'DRIVING_LICENCE';
+  documentCountry: string;
+  documentNumberLast4: string;
+  documentExpiry: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  decidedBy?: 'AUTO' | 'ADMIN';
+  checks: KycCheck[];
+  reason?: string;
+  createdAt: string;
+  decidedAt?: string;
+}
+
+export interface KycInfo {
+  status: KycStatus;
+  canWithdraw: boolean;
+  /** Absent once verified (no cap). */
+  depositCapTokens?: number;
+  depositedTokens?: number;
+  latest?: KycSubmission;
+}
+
 export interface Limit {
   limitType: 'deposit' | 'loss' | 'wager';
   period: 'daily' | 'weekly' | 'monthly';

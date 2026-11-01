@@ -3,9 +3,7 @@ import { createSignal, For, Show } from 'solid-js';
 import { ApiError } from '../api/client';
 import { Button, Card, Field, Input, Select } from '../components/ui';
 import { auth } from '../lib/auth';
-import { appConfig } from '../lib/format';
-
-const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
+import { countryName, licensedCountries } from '../lib/format';
 
 export default function Register() {
   const navigate = useNavigate();
@@ -54,8 +52,8 @@ export default function Register() {
           </Field>
           <Field label="Country">
             <Select value={form().country} onChange={set('country')}>
-              <For each={appConfig()?.licensedCountries ?? ['CZ']}>
-                {(c) => <option value={c}>{countryNames.of(c) ?? c}</option>}
+              <For each={licensedCountries()}>
+                {(c) => <option value={c} selected={c === form().country}>{countryName(c)}</option>}
               </For>
             </Select>
           </Field>

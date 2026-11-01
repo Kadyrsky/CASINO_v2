@@ -20,6 +20,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["me"];
+        put: operations["updateProfile"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/wallet/withdrawals": {
         parameters: {
             query?: never;
@@ -212,6 +228,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/kyc/submissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["submit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/chat/rooms/{roomId}/messages": {
         parameters: {
             query?: never;
@@ -366,6 +398,38 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["settle"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/kyc/submissions/{id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["reject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/kyc/submissions/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["approve"];
         delete?: never;
         options?: never;
         head?: never;
@@ -539,7 +603,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["me"];
+        get: operations["me_1"];
         put?: never;
         post?: never;
         delete?: never;
@@ -596,6 +660,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/kyc": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/config": {
         parameters: {
             query?: never;
@@ -644,22 +724,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/auth/me": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["me_1"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/admin/review-queue": {
         parameters: {
             query?: never;
@@ -668,6 +732,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["reviewQueue"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/kyc/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["queue"];
         put?: never;
         post?: never;
         delete?: never;
@@ -716,6 +796,23 @@ export interface components {
             limitType: string;
             period: string;
             amountTokens: number;
+        };
+        ProfileRequest: {
+            /** Format: date */
+            dateOfBirth: string;
+            country: string;
+        };
+        UserView: {
+            /** Format: uuid */
+            id?: string;
+            username?: string;
+            email?: string;
+            role?: string;
+            country?: string;
+            /** Format: date */
+            dateOfBirth?: string;
+            /** Format: date-time */
+            createdAt?: string;
         };
         AmountRequest: {
             amountTokens: number;
@@ -816,6 +913,46 @@ export interface components {
             /** Format: int64 */
             amount?: number;
         };
+        SubmitRequest: {
+            firstName: string;
+            lastName: string;
+            documentType: string;
+            documentNumber: string;
+            /** Format: date */
+            documentExpiry: string;
+        };
+        JsonNode: unknown;
+        KycView: {
+            status?: string;
+            canWithdraw?: boolean;
+            depositCapTokens?: number;
+            depositedTokens?: number;
+            latest?: components["schemas"]["Submission"];
+        };
+        Submission: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            userId?: string;
+            username?: string;
+            firstName?: string;
+            lastName?: string;
+            /** Format: date */
+            dateOfBirth?: string;
+            documentType?: string;
+            documentCountry?: string;
+            documentNumberLast4?: string;
+            /** Format: date */
+            documentExpiry?: string;
+            status?: string;
+            decidedBy?: string;
+            checks?: components["schemas"]["JsonNode"];
+            reason?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            decidedAt?: string;
+        };
         PostRequest: {
             message: string;
         };
@@ -834,6 +971,7 @@ export interface components {
             selectionId: string;
             stakeTokens: number;
             expectedOdds?: number;
+            acceptHigherOdds?: boolean;
         };
         BetView: {
             /** Format: uuid */
@@ -870,16 +1008,6 @@ export interface components {
             expiresAt?: string;
             user?: components["schemas"]["UserView"];
         };
-        UserView: {
-            /** Format: uuid */
-            id?: string;
-            username?: string;
-            email?: string;
-            role?: string;
-            country?: string;
-            /** Format: date-time */
-            createdAt?: string;
-        };
         LoginRequest: {
             username: string;
             password: string;
@@ -889,6 +1017,9 @@ export interface components {
             winnerSide: number;
             /** Format: int32 */
             durationSeconds: number;
+        };
+        RejectRequest: {
+            reason: string;
         };
         WalletResponse: {
             /** Format: uuid */
@@ -976,7 +1107,6 @@ export interface components {
             items?: components["schemas"]["HandHistoryView"][];
             nextCursor?: string;
         };
-        JsonNode: unknown;
         MarketView: {
             /** Format: uuid */
             id?: string;
@@ -1089,6 +1219,50 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    me: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["UserView"];
+                };
+            };
+        };
+    };
+    updateProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["UserView"];
+                };
             };
         };
     };
@@ -1394,6 +1568,30 @@ export interface operations {
             };
         };
     };
+    submit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmitRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["KycView"];
+                };
+            };
+        };
+    };
     latest: {
         parameters: {
             query?: never;
@@ -1657,6 +1855,50 @@ export interface operations {
             };
         };
     };
+    reject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RejectRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    approve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     wallet: {
         parameters: {
             query?: never;
@@ -1875,7 +2117,7 @@ export interface operations {
             };
         };
     };
-    me: {
+    me_1: {
         parameters: {
             query?: never;
             header?: never;
@@ -1968,6 +2210,26 @@ export interface operations {
             };
         };
     };
+    status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["KycView"];
+                };
+            };
+        };
+    };
     config: {
         parameters: {
             query?: never;
@@ -2030,26 +2292,6 @@ export interface operations {
             };
         };
     };
-    me_1: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "*/*": components["schemas"]["UserView"];
-                };
-            };
-        };
-    };
     reviewQueue: {
         parameters: {
             query?: never;
@@ -2066,6 +2308,26 @@ export interface operations {
                 };
                 content: {
                     "*/*": components["schemas"]["MatchView"][];
+                };
+            };
+        };
+    };
+    queue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["Submission"][];
                 };
             };
         };

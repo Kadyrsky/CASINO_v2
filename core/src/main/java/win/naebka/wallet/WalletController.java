@@ -27,6 +27,7 @@ import win.naebka.common.Exceptions.DomainException;
 import win.naebka.common.Money;
 import win.naebka.common.TxRetry;
 import win.naebka.config.NaebkaProperties;
+import win.naebka.kyc.KycService;
 
 /**
  * Wallet endpoints. In PLAY_MONEY mode deposits are credited directly; in REAL_MONEY mode they would be
@@ -36,12 +37,15 @@ import win.naebka.config.NaebkaProperties;
 public class WalletController {
     private final WalletService wallets;
     private final ResponsibleGamingService rg;
+    private final KycService kyc;
     private final TxRetry tx;
     private final NaebkaProperties props;
 
-    public WalletController(WalletService wallets, ResponsibleGamingService rg, TxRetry tx, NaebkaProperties props) {
+    public WalletController(WalletService wallets, ResponsibleGamingService rg, KycService kyc, TxRetry tx,
+                            NaebkaProperties props) {
         this.wallets = wallets;
         this.rg = rg;
+        this.kyc = kyc;
         this.tx = tx;
         this.props = props;
     }
@@ -105,6 +109,7 @@ public class WalletController {
         return tx.inTransaction(() -> {
             if (wallets.findByKey(idem).isEmpty()) {
                 rg.assertCanDeposit(userId, amount);
+                kyc.assertCanDeposit(userId, amount);
             }
             return TransactionView.of(wallets.credit(wallets.walletIdOf(userId), amount, TxType.DEPOSIT,
                     LedgerSource.NONE, idem));
@@ -118,6 +123,7 @@ public class WalletController {
         UUID userId = AuthUser.current().id();
         long amount = Money.toMinor(req.amountTokens());
         String idem = "withdrawal:" + userId + ":" + requireKey(key);
+        kyc.assertCanWithdraw(userId);
         return tx.inTransaction(() -> TransactionView.of(
                 wallets.debit(wallets.walletIdOf(userId), amount, TxType.WITHDRAWAL, LedgerSource.NONE, idem)));
     }

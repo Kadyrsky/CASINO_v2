@@ -7,6 +7,18 @@ export const appConfig = createRoot(() => {
   return config;
 });
 
+const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
+
+/** "CZ" → "Czechia" */
+export function countryName(code: string): string {
+  return regionNames.of(code) ?? code;
+}
+
+/** Licensed country codes, sorted by English name for dropdowns. */
+export function licensedCountries(): string[] {
+  return [...(appConfig()?.licensedCountries ?? ['CZ'])].sort((a, b) => countryName(a).localeCompare(countryName(b)));
+}
+
 const tokenFmt = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /** 1234.5 → "1,234.50" */
