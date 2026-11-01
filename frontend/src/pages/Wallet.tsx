@@ -3,6 +3,7 @@ import { createInfiniteQuery, createQuery, useQueryClient } from '@tanstack/soli
 import { createSignal, For, onMount, Show } from 'solid-js';
 import { ApiError, del, get, newIdempotencyKey, post, put } from '../api/client';
 import type { KycInfo, Limit, Page, SessionInfo, Transaction, Wallet } from '../api/types';
+import { EthWallet } from '../components/EthWallet';
 import { KYC_LABEL, KYC_TONE } from '../components/kyc';
 import { toast } from '../components/toast';
 import { Badge, Button, Card, Empty, Field, Input, Modal, PageHeader, Select, Spinner, Stat } from '../components/ui';
@@ -297,6 +298,7 @@ export default function WalletPage() {
             </div>
             <KycBanner />
           </Card>
+          <EthWallet />
           <Limits />
           <SelfExclusion />
           <Sessions />

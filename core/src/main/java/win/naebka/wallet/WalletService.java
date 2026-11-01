@@ -102,12 +102,14 @@ public class WalletService {
 
         LedgerEntry entry = jdbc.sql("""
                 INSERT INTO transactions (wallet_id, type, amount, balance_after, bet_id, slot_round_id,
-                                          poker_hand_id, btc_payment_id, idempotency_key)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                          poker_hand_id, btc_payment_id, eth_payment_id, eth_withdrawal_id,
+                                          idempotency_key)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 RETURNING id, wallet_id, type, amount, balance_after, bet_id, slot_round_id, poker_hand_id,
                           idempotency_key, created_at""")
                 .params(walletId, type.name(), signedAmount, updated.get().balance(), source.betId(),
-                        source.slotRoundId(), source.pokerHandId(), source.btcPaymentId(), key)
+                        source.slotRoundId(), source.pokerHandId(), source.btcPaymentId(), source.ethPaymentId(),
+                        source.ethWithdrawalId(), key)
                 .query(WalletService::mapEntry).single();
 
         ws.publishToUser(updated.get().userId(), "WALLET_UPDATED",

@@ -39,6 +39,17 @@ services:
       NAEBKA_ADMIN_PASSWORD: ${NAEBKA_ADMIN_PASSWORD:-admin12345}
       NAEBKA_POKER_BLOCK_SAME_IP: ${NAEBKA_POKER_BLOCK_SAME_IP:-false}
       NAEBKA_DEADLOCK_API_BASE_URL: ${DEADLOCK_API_BASE_URL:-https://api.deadlock-api.com}
+      # MetaMask + Sepolia deposits: off while NAEBKA_ETH_CONTRACT_ADDRESS is empty.
+      NAEBKA_ETH_CONTRACT_ADDRESS: ${NAEBKA_ETH_CONTRACT_ADDRESS:-}
+      NAEBKA_ETH_DEPLOY_BLOCK: ${NAEBKA_ETH_DEPLOY_BLOCK:-0}
+      NAEBKA_ETH_RPC_URL: ${NAEBKA_ETH_RPC_URL:-https://ethereum-sepolia-rpc.publicnode.com}
+      NAEBKA_ETH_TOKENS_PER_ETH: ${NAEBKA_ETH_TOKENS_PER_ETH:-100000}
+      NAEBKA_ETH_CONFIRMATIONS: ${NAEBKA_ETH_CONFIRMATIONS:-3}
+      NAEBKA_ETH_SIWE_DOMAIN: ${NAEBKA_ETH_SIWE_DOMAIN:-localhost:8080}
+      NAEBKA_ETH_SIWE_URI: ${NAEBKA_ETH_SIWE_URI:-http://localhost:8080}
+      # Withdrawals to MetaMask: off while NAEBKA_ETH_OPERATOR_KEY is empty (Sepolia test key only).
+      NAEBKA_ETH_OPERATOR_KEY: ${NAEBKA_ETH_OPERATOR_KEY:-}
+      NAEBKA_ETH_MAX_FEE_GWEI: ${NAEBKA_ETH_MAX_FEE_GWEI:-50}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
