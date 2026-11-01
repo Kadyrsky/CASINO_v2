@@ -95,12 +95,14 @@ def test_assets_keep_only_what_the_site_draws() -> None:
     heroes = [{"id": 1, "name": "Infernus", "images": {"icon_image_small": "i.png", "minimap_image_webp": "m.webp"}, "colors": {"ui": [1, 2, 3]}}]
     ranks = [{"tier": 10, "name": "Ascendant", "images": {"large": "l.png", "large_webp": "l.webp"}, "color": "#fff"}]
     items = [{"id": 5, "type": "upgrade", "name": "Extended Magazine", "image": "x.png", "item_tier": 1, "item_slot_type": "weapon"},
-             {"id": 6, "type": "ability", "name": "Fireball"}]
+             {"id": 6, "type": "ability", "ability_type": "signature", "name": "Fireball", "image": "f.png", "image_webp": "f.webp"},
+             {"id": 7, "type": "ability", "ability_type": "innate", "name": "Jump"}]
     world = {"radius": 10752, "images": {"minimap": "map.png"},
              "zipline_paths": [{"origin": [10, 20, 0], "color": "#29b1cc", "P0_points": [[0, 0, 0], [1, 2, 3]]}]}
     a = compact_assets(heroes, ranks, items, world)
     assert a["heroes"]["1"] == {"name": "Infernus", "icon": "i.png", "minimap": "m.webp", "color": [1, 2, 3]}
     assert a["ranks"]["10"]["image"] == "l.webp"
     assert list(a["items"]) == ["5"]
+    assert a["abilities"] == {"6": {"name": "Fireball", "image": "f.webp"}}  # hero abilities only, not Jump
     assert a["map"]["lanes"][0]["points"] == [[10, 20], [11, 22]]
     assert a["map"]["radius"] == 10752

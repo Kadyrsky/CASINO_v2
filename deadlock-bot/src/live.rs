@@ -1,7 +1,8 @@
 //! Live map feed: reads a match's Valve broadcast (the stream the in-game spectator uses, served over HTTP by
 //! Valve's relays) with the [haste](https://github.com/blukai/haste) parser and turns it into compact frames:
-//! every hero's position, health, level, souls, K/D/A and items, the objectives still standing, and events (kills,
-//! purchases, objectives destroyed). The broadcast runs about 20 s behind the real game.
+//! every hero's position, health, level, souls, K/D/A and items, the objectives still standing, the Soul Urn and the
+//! Unstable Rift, and events (kills, purchases, abilities unlocked and upgraded, objectives destroyed, urn and rift).
+//! The broadcast runs about 20 s behind the real game.
 //!
 //! haste's parser is single-threaded (`Rc` inside), so each feed runs on its own thread with its own runtime;
 //! frames leave through a channel.
@@ -28,10 +29,27 @@ const MSG_HERO_KILLED: u32 = 319;
 const MSG_OBJECTIVE_MASK: u32 = 324;
 /// Steam IDs are 64-bit; Deadlock account ids are the low 32 bits.
 const STEAM_ID_BASE: u64 = 76_561_197_960_265_728;
+/// An entity handle that points at nothing.
+const NO_HANDLE: u32 = 0xFF_FFFF;
 
 const CONTROLLER: u64 = fxhash::hash_bytes(b"CCitadelPlayerController");
 const PAWN: u64 = fxhash::hash_bytes(b"CCitadelPlayerPawn");
 const GAME_RULES: u64 = fxhash::hash_bytes(b"CCitadelGameRulesProxy");
+
+// The Soul Urn ("idol" in the game's code), as seen on live broadcasts: on the ground it is a pickup; a player who
+// carries it has the GoldenIdol ability; picking it up enables one of the two return triggers, where it is delivered.
+const URN: u64 = fxhash::hash_bytes(b"CCitadelItemPickupIdol");
+const URN_CARRIED: u64 = fxhash::hash_bytes(b"CCitadel_Ability_GoldenIdol");
+const URN_DELIVERY: u64 = fxhash::hash_bytes(b"CCitadelIdolReturnTrigger");
+// The Unstable Rift ("KOTH" in the game's code): the spawner stands on a side-lane bridge for about 76 s, then the
+// capture point (the cash-in) opens there. Capture progress, the deadline and the winner are in the game rules.
+const RIFT_SPAWNER: u64 = fxhash::hash_bytes(b"CCitadelItemKothSpawner");
+const RIFT_OPEN: u64 = fxhash::hash_bytes(b"CCitadel_KothCashIn");
+
+const ITEM_ID: u64 = fxhash::hash_bytes(b"m_ItemID");
+const UPGRADE_INFO: u64 = fxhash::hash_bytes(b"m_nUpgradeInfo");
+const CAPTURE_PROGRESS: u64 = fxhash::hash_bytes(b"m_flCaptureProgressFrac");
+const CAPTURER_COUNT: u64 = fxhash::hash_bytes(b"m_nCapturerCount");
 
 /// Map objectives: serializer name hash → kind shown on the map.
 const OBJECTIVES: [(u64, &str); 6] = [
@@ -84,13 +102,120 @@ pub struct Objective {
     pub max_hp: i32,
 }
 
+/// The Soul Urn while it is in play.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct Urn {
+    pub x: f32,
+    pub y: f32,
+    /// The player carrying it; None while it lies on the ground.
+    pub carrier: Option<u32>,
+    /// Where it has to be taken, once someone has picked it up.
+    pub delivery: Option<[f32; 2]>,
+}
+
+/// The Unstable Rift: appearing on a bridge, then open as a capture point.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct Rift {
+    pub x: f32,
+    pub y: f32,
+    pub open: bool,
+    /// Each team's capture progress, 0 to 1.
+    pub progress: [f32; 2],
+    /// Each team's players on the point.
+    pub capturers: [i32; 2],
+    /// Seconds until an open rift closes if nobody captures it.
+    pub closes_in_s: Option<f32>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     Kill { time_s: f32, victim: u32, killer: Option<u32>, assisters: Vec<u32> },
     Purchase { time_s: f32, account_id: u32, item_id: u32 },
     LevelUp { time_s: f32, account_id: u32, level: i32 },
+    /// Abilities start locked; unlocking one makes it usable.
+    AbilityUnlocked { time_s: f32, account_id: u32, ability_id: u32 },
+    /// An ability point put into an unlocked ability: tier 1 to 3.
+    AbilityUpgraded { time_s: f32, account_id: u32, ability_id: u32, tier: u32 },
     ObjectiveDestroyed { time_s: f32, kind: &'static str, team: Option<u8>, lane: Option<i32> },
+    UrnSpawned { time_s: f32 },
+    UrnPickedUp { time_s: f32, account_id: u32 },
+    UrnDropped { time_s: f32, account_id: u32 },
+    UrnDelivered { time_s: f32, account_id: u32, team: u8 },
+    RiftAppeared { time_s: f32 },
+    RiftOpened { time_s: f32 },
+    RiftCaptured { time_s: f32, team: u8 },
+    /// Nobody captured the open rift in time.
+    RiftClosed { time_s: f32 },
+}
+
+/// Whether an ability is unlocked, and how many ability points went into it (0 to 3). Read from live broadcasts: the
+/// unlock is bit 16 of `m_nUpgradeInfo`, each point one more bit above it (0x10000, 0x30000, 0x70000, 0xF0000).
+fn ability_level(info: u32) -> (bool, u32) {
+    let bits = (info >> 16) & 0xF;
+    (bits & 1 != 0, (bits >> 1).count_ones())
+}
+
+/// The events between two readings of one player's abilities (ability id, upgrade info).
+fn ability_events(time_s: f32, account_id: u32, before: &[(u32, u32)], now: &[(u32, u32)]) -> Vec<Event> {
+    let mut out = Vec::new();
+    for &(ability_id, info) in now {
+        let Some(&(_, old)) = before.iter().find(|(id, _)| *id == ability_id) else { continue };
+        let ((was_unlocked, was_tier), (unlocked, tier)) = (ability_level(old), ability_level(info));
+        if unlocked && !was_unlocked {
+            out.push(Event::AbilityUnlocked { time_s, account_id, ability_id });
+        }
+        for tier in (was_tier + 1)..=tier {
+            out.push(Event::AbilityUpgraded { time_s, account_id, ability_id, tier });
+        }
+    }
+    out
+}
+
+/// The urn events between two frames. `team_of_player` gives a carrier's team for deliveries.
+fn urn_events(time_s: f32, before: Option<&Urn>, now: Option<&Urn>, team_of_player: impl Fn(u32) -> Option<u8>) -> Vec<Event> {
+    match (before.map(|u| u.carrier), now.map(|u| u.carrier)) {
+        (None, Some(None)) => vec![Event::UrnSpawned { time_s }],
+        (None | Some(None), Some(Some(a))) => vec![Event::UrnPickedUp { time_s, account_id: a }],
+        (Some(Some(a)), Some(Some(b))) if a != b => vec![Event::UrnPickedUp { time_s, account_id: b }],
+        (Some(Some(a)), Some(None)) => vec![Event::UrnDropped { time_s, account_id: a }],
+        // Carried one frame, gone the next: delivered.
+        (Some(Some(a)), None) => team_of_player(a)
+            .map(|team| Event::UrnDelivered { time_s, account_id: a, team })
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The rift events between two frames. `captured_now` is the team that captured it since the last frame (the game
+/// rules' scoring time changed); `captured_earlier` says this rift was already captured, so its removal is no close.
+fn rift_events(time_s: f32, before: Option<&Rift>, now: Option<&Rift>, captured_now: Option<u8>, captured_earlier: bool) -> Vec<Event> {
+    let mut out = Vec::new();
+    match (before, now) {
+        (None, Some(r)) if !r.open => out.push(Event::RiftAppeared { time_s }),
+        (None, Some(_)) => out.push(Event::RiftOpened { time_s }),
+        (Some(b), Some(r)) if !b.open && r.open => out.push(Event::RiftOpened { time_s }),
+        (Some(b), None) if b.open && !captured_earlier && captured_now.is_none() => out.push(Event::RiftClosed { time_s }),
+        _ => {}
+    }
+    if let Some(team) = captured_now {
+        out.push(Event::RiftCaptured { time_s, team });
+    }
+    out
+}
+
+/// What the game rules say about the rift (updated as they change).
+#[derive(Default)]
+struct RiftRules {
+    /// Server time when an open rift gives up; 0 while none is open.
+    give_up: f32,
+    /// Server time of the last capture; a new value means a new capture.
+    scoring_time: f32,
+    scoring_team: Option<u8>,
+    /// Per team (Hidden King first), from `m_vecTeamKothStates`.
+    progress: [f32; 2],
+    capturers: [i32; 2],
 }
 
 /// One sample of the match, about twice a second of game time.
@@ -112,6 +237,8 @@ pub struct Frame {
     pub winning_team: Option<u8>,
     pub players: Vec<Player>,
     pub objectives: Vec<Objective>,
+    pub urn: Option<Urn>,
+    pub rift: Option<Rift>,
     pub events: Vec<Event>,
 }
 
@@ -165,6 +292,25 @@ fn position(e: &Entity) -> Option<(f32, f32)> {
     })
 }
 
+/// Key of element `i` of a dynamic array field (haste keys it as base key + hash(i)); struct members add their name.
+fn element(base: u64, i: usize) -> u64 {
+    fxhash::add_u64_to_hash(base, fxhash::add_u64_to_hash(0, i as u64))
+}
+
+/// A player's four abilities as (ability id, upgrade info), from the controller.
+fn abilities(c: &Entity) -> Vec<(u32, u32)> {
+    let base = key!("m_PlayerDataGlobal", "m_vecAbilityUpgradeState");
+    let len = int(c, base).and_then(|n| usize::try_from(n).ok()).unwrap_or(0).min(8);
+    (0..len)
+        .filter_map(|i| {
+            let el = element(base, i);
+            let id = int(c, fxhash::add_u64_to_hash(el, ITEM_ID)).and_then(|v| u32::try_from(v).ok()).filter(|&v| v != 0)?;
+            let info = int(c, fxhash::add_u64_to_hash(el, UPGRADE_INFO)).and_then(|v| u32::try_from(v).ok()).unwrap_or(0);
+            Some((id, info))
+        })
+        .collect()
+}
+
 /// Elements of a dynamic array field. The base key holds the length; haste keys element i as base key + hash(i).
 fn array_u32(e: &Entity, base: u64, max: usize) -> Vec<u32> {
     let len = int(e, base).and_then(|n| usize::try_from(n).ok()).unwrap_or(0).min(max);
@@ -200,9 +346,17 @@ struct Sampler {
     minimap: Option<[f32; 4]>,
     masks: Option<[u64; 2]>,
     winning_team: Option<u8>,
+    rift_rules: RiftRules,
     /// What the previous frame said, to turn changes into events.
     previous: HashMap<u32, (i32, Vec<u32>)>,
+    previous_abilities: HashMap<u32, Vec<(u32, u32)>>,
     previous_objectives: BTreeMap<i32, Objective>,
+    previous_urn: Option<Urn>,
+    previous_rift: Option<Rift>,
+    previous_scoring_time: f32,
+    rift_captured: bool,
+    /// False until the first frame, so a feed that joins mid-match reports nothing that happened before.
+    primed: bool,
     pending: Vec<Event>,
     out: Rc<RefCell<Vec<Frame>>>,
 }
@@ -234,6 +388,8 @@ impl Sampler {
 
         let mut pawns: HashMap<(u32, u8), &Entity> = HashMap::new();
         let mut objectives = Vec::new();
+        let (mut urn_ground, mut urn_pawn, mut urn_delivery) = (None, None, None);
+        let (mut rift_spawner, mut rift_open) = (None, None);
         for (&index, e) in entities.iter() {
             if e.serializer_name_heq(PAWN) {
                 let hero = int(e, key!("m_CCitadelHeroComponent", "m_spawnedHero", "m_nHeroID"))
@@ -258,12 +414,30 @@ impl Sampler {
                     hp,
                     max_hp: int32(e, key!("m_iMaxHealth")).unwrap_or(hp).max(hp),
                 });
+            } else if e.serializer_name_heq(URN) {
+                urn_ground = urn_ground.or_else(|| position(e));
+            } else if e.serializer_name_heq(URN_CARRIED) {
+                // Attached to the carrier's hero.
+                urn_pawn = int(e, key!("CBodyComponent", "m_hParent"))
+                    .or_else(|| int(e, key!("m_hOwnerEntity")))
+                    .and_then(|h| u32::try_from(h).ok())
+                    .filter(|&h| h != NO_HANDLE)
+                    .map(ehandle_to_index);
+            } else if e.serializer_name_heq(URN_DELIVERY) {
+                if e.get_value::<bool>(&key!("m_bDisabled")) == Some(false) {
+                    urn_delivery = position(e);
+                }
+            } else if e.serializer_name_heq(RIFT_SPAWNER) {
+                rift_spawner = rift_spawner.or_else(|| position(e));
+            } else if e.serializer_name_heq(RIFT_OPEN) && e.get_value::<bool>(&key!("m_bDisabled")) != Some(true) {
+                rift_open = rift_open.or_else(|| position(e));
             }
         }
 
         // Server time, which respawn and cooldown timestamps use.
         let now = self.clock.net_tick as f32 * self.clock.tick_interval.unwrap_or(1.0 / 64.0);
         let mut players = Vec::new();
+        let mut abilities_now: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
         for (&index, c) in entities.iter() {
             if !c.serializer_name_heq(CONTROLLER) {
                 continue;
@@ -277,6 +451,7 @@ impl Sampler {
             let alive = c.get_value::<bool>(&key!("m_PlayerDataGlobal", "m_bAlive")).unwrap_or(true);
             let pos = pawns.get(&(hero_id, team)).and_then(|p| position(p));
             let respawn = c.get_value::<f32>(&key!("m_PlayerDataGlobal", "m_flRespawnTime"));
+            abilities_now.insert(account_id, abilities(c));
             players.push(Player {
                 slot: index,
                 account_id,
@@ -313,6 +488,52 @@ impl Sampler {
             }
         }
         self.previous = players.iter().map(|p| (p.account_id, (p.level, p.items.clone()))).collect();
+        for (account_id, now) in &abilities_now {
+            if let Some(before) = self.previous_abilities.get(account_id) {
+                self.pending.extend(ability_events(time_s, *account_id, before, now));
+            }
+        }
+        self.previous_abilities = abilities_now;
+
+        // The urn: carried (at the carrier), on the ground, or not in play.
+        let carrier = urn_pawn.and_then(|i| self.account_of_pawn(ctx, i));
+        let delivery = urn_delivery.map(|(x, y): (f32, f32)| [x.round(), y.round()]);
+        let urn = match carrier {
+            Some(a) => players
+                .iter()
+                .find(|p| p.account_id == a)
+                .and_then(|p| p.x.zip(p.y))
+                .or_else(|| self.previous_urn.as_ref().map(|u| (u.x, u.y)))
+                .map(|(x, y)| Urn { x, y, carrier: Some(a), delivery }),
+            None => urn_ground.map(|(x, y)| Urn { x: x.round(), y: y.round(), carrier: None, delivery }),
+        };
+        // The rift: open (with the game rules' progress), appearing, or not in play.
+        let rules = &self.rift_rules;
+        let rift = match (rift_open, rift_spawner) {
+            (Some((x, y)), _) => Some(Rift {
+                x: x.round(),
+                y: y.round(),
+                open: true,
+                progress: rules.progress,
+                capturers: rules.capturers,
+                closes_in_s: (rules.give_up > 0.0).then(|| (rules.give_up - now).max(0.0)),
+            }),
+            (None, Some((x, y))) => Some(Rift { x: x.round(), y: y.round(), open: false, progress: [0.0; 2], capturers: [0; 2], closes_in_s: None }),
+            (None, None) => None,
+        };
+        let captured_now = (rules.scoring_time > 0.0 && rules.scoring_time != self.previous_scoring_time)
+            .then_some(rules.scoring_team)
+            .flatten();
+        if self.primed {
+            let team_of_player = |a: u32| players.iter().find(|p| p.account_id == a).map(|p| p.team);
+            self.pending.extend(urn_events(time_s, self.previous_urn.as_ref(), urn.as_ref(), team_of_player));
+            self.pending.extend(rift_events(time_s, self.previous_rift.as_ref(), rift.as_ref(), captured_now, self.rift_captured));
+        }
+        self.rift_captured = rift.is_some() && (self.rift_captured || captured_now.is_some());
+        self.previous_scoring_time = self.rift_rules.scoring_time;
+        self.previous_urn = urn.clone();
+        self.previous_rift = rift.clone();
+
         let standing: BTreeMap<i32, Objective> = objectives.iter().map(|o| (o.id, o.clone())).collect();
         for (id, gone) in &self.previous_objectives {
             if !standing.contains_key(id) && gone.kind != "midboss" {
@@ -337,8 +558,11 @@ impl Sampler {
             winning_team: self.winning_team,
             players,
             objectives,
+            urn,
+            rift,
             events: std::mem::take(&mut self.pending),
         });
+        self.primed = true;
     }
 }
 
@@ -393,6 +617,16 @@ impl Visitor for Sampler {
                 self.minimap = Some([a[0], a[1], b[0], b[1]]);
             }
             self.winning_team = int(e, key!("m_pGameRules", "m_iWinningTeam")).and_then(team_of);
+            let rift = &mut self.rift_rules;
+            rift.give_up = e.get_value(&key!("m_pGameRules", "m_timeKothGiveUp")).unwrap_or(0.0);
+            rift.scoring_time = e.get_value(&key!("m_pGameRules", "m_timeKothScoring")).unwrap_or(0.0);
+            rift.scoring_team = int(e, key!("m_pGameRules", "m_nKothScoringTeam")).and_then(team_of);
+            let states = key!("m_pGameRules", "m_vecTeamKothStates");
+            for team in 0..2 {
+                let el = element(states, team);
+                rift.progress[team] = e.get_value::<f32>(&fxhash::add_u64_to_hash(el, CAPTURE_PROGRESS)).unwrap_or(0.0).clamp(0.0, 1.0);
+                rift.capturers[team] = int32(e, fxhash::add_u64_to_hash(el, CAPTURER_COUNT)).unwrap_or(0);
+            }
         }
         Ok(())
     }
@@ -448,8 +682,15 @@ pub async fn follow(
         minimap: None,
         masks: None,
         winning_team: None,
+        rift_rules: RiftRules::default(),
         previous: HashMap::new(),
+        previous_abilities: HashMap::new(),
         previous_objectives: BTreeMap::new(),
+        previous_urn: None,
+        previous_rift: None,
+        previous_scoring_time: 0.0,
+        rift_captured: false,
+        primed: false,
         pending: Vec::new(),
         out: out.clone(),
     };
@@ -503,6 +744,60 @@ mod tests {
     fn converts_steam_ids_to_account_ids() {
         assert_eq!(steam_to_account(76_561_198_348_236_050), 387_970_322);
         assert_eq!(steam_to_account(387_970_322), 387_970_322);
+    }
+
+    fn names(events: &[Event]) -> Vec<String> {
+        events.iter().map(|e| serde_json::to_value(e).unwrap()["type"].as_str().unwrap().to_owned()).collect()
+    }
+
+    #[test]
+    fn reads_ability_unlocks_and_points_like_live_broadcasts() {
+        // The values seen on broadcasts: locked, unlocked, then one bit more per ability point.
+        assert_eq!(ability_level(0), (false, 0));
+        assert_eq!(ability_level(0x10000), (true, 0));
+        assert_eq!(ability_level(0x30000), (true, 1));
+        assert_eq!(ability_level(0x70000), (true, 2));
+        assert_eq!(ability_level(0xF0000), (true, 3));
+    }
+
+    #[test]
+    fn ability_changes_become_events() {
+        let before = [(11, 0), (22, 0x10000), (33, 0x70000)];
+        let now = [(11, 0x10000), (22, 0x70000), (33, 0x70000)];
+        let events = ability_events(5.0, 7, &before, &now);
+        assert_eq!(names(&events), ["ability_unlocked", "ability_upgraded", "ability_upgraded"]);
+        let json = serde_json::to_value(&events[2]).unwrap();
+        assert_eq!((json["ability_id"].as_u64(), json["tier"].as_u64()), (Some(22), Some(2)));
+        assert!(ability_events(5.0, 7, &now, &now).is_empty());
+    }
+
+    #[test]
+    fn urn_spawn_pickup_drop_and_delivery() {
+        let ground = Urn { x: 1.0, y: 2.0, carrier: None, delivery: None };
+        let carried = |a| Urn { x: 1.0, y: 2.0, carrier: Some(a), delivery: Some([6304.0, -96.0]) };
+        let team = |a: u32| Some(if a == 1 { 0 } else { 1 });
+        assert_eq!(names(&urn_events(0.0, None, Some(&ground), team)), ["urn_spawned"]);
+        assert_eq!(names(&urn_events(0.0, Some(&ground), Some(&carried(1)), team)), ["urn_picked_up"]);
+        assert_eq!(names(&urn_events(0.0, Some(&carried(1)), Some(&ground), team)), ["urn_dropped"]);
+        let delivered = urn_events(0.0, Some(&carried(2)), None, team);
+        assert_eq!(names(&delivered), ["urn_delivered"]);
+        assert_eq!(serde_json::to_value(&delivered[0]).unwrap()["team"], 1);
+        assert!(urn_events(0.0, Some(&ground), None, team).is_empty()); // gone from the ground: not a delivery
+    }
+
+    #[test]
+    fn rift_appears_opens_and_is_captured_or_closes() {
+        let appearing = Rift { x: -7648.0, y: 0.0, open: false, progress: [0.0; 2], capturers: [0; 2], closes_in_s: None };
+        let open = Rift { open: true, closes_in_s: Some(60.0), ..appearing.clone() };
+        assert_eq!(names(&rift_events(0.0, None, Some(&appearing), None, false)), ["rift_appeared"]);
+        assert_eq!(names(&rift_events(0.0, Some(&appearing), Some(&open), None, false)), ["rift_opened"]);
+        // Captured while the point still stands, then removed: one capture, no close.
+        assert_eq!(names(&rift_events(0.0, Some(&open), Some(&open), Some(0), false)), ["rift_captured"]);
+        assert!(rift_events(0.0, Some(&open), None, None, true).is_empty());
+        // Captured and removed in the same frame.
+        assert_eq!(names(&rift_events(0.0, Some(&open), None, Some(1), false)), ["rift_captured"]);
+        // Nobody took it in time.
+        assert_eq!(names(&rift_events(0.0, Some(&open), None, None, false)), ["rift_closed"]);
     }
 
     #[test]

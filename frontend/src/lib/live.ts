@@ -2,7 +2,7 @@
 import { createQuery } from '@tanstack/solid-query';
 import { get } from '../api/client';
 import type { GameMode, LiveAssets, MatchMode, ObjectiveKind } from '../api/types';
-import { ITEM_ICONS, wikiKey } from './wikiIcons';
+import { ABILITY_ICONS, ITEM_ICONS, wikiKey } from './wikiIcons';
 
 /** Hero, rank and item names and images, and the map (cached by the core for an hour). */
 export function useLiveAssets() {
@@ -54,6 +54,17 @@ export function itemOf(assets: LiveAssets | undefined, id: number) {
   const file = ITEM_ICONS[wikiKey(item.name)];
   return file ? { ...item, image: `/icons/items/${file}.webp` } : item;
 }
+
+/** A hero ability's name and icon: the Deadlock Wiki's icon when there is one, else deadlock-api's. */
+export function abilityOf(assets: LiveAssets | undefined, id: number) {
+  const ability = assets?.abilities?.[String(id)];
+  if (!ability) return null;
+  const file = ABILITY_ICONS[wikiKey(ability.name)];
+  return file ? { ...ability, image: `/icons/abilities/${file}.webp` } : ability;
+}
+
+export const URN_ICON = '/icons/objectives/urn.webp';
+export const RIFT_ICON = '/icons/objectives/rift.webp';
 
 /** A map objective's icon from the Deadlock Wiki (see scripts/wiki_icons.py). Patrons show their team's glyph. */
 export function objectiveIcon(kind: ObjectiveKind, team: 0 | 1 | null): string | null {

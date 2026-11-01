@@ -228,6 +228,12 @@ def compact_assets(heroes: list[Any], ranks: list[Any], items: list[Any], world:
             }
             for i in items if isinstance(i, dict) and i.get("type") == "upgrade" and "id" in i
         },
+        # Heroes' own four abilities, for the realtime map's "unlocked / upgraded an ability" events.
+        "abilities": {
+            str(i["id"]): {"name": i.get("name"), "image": i.get("image_webp") or i.get("image")}
+            for i in items if isinstance(i, dict) and i.get("type") == "ability" and "id" in i
+            and i.get("ability_type") in ("signature", "ultimate")
+        },
         "map": {
             "radius": world.get("radius"),
             "image": (world.get("images") or {}).get("minimap"),

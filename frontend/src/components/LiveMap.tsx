@@ -9,10 +9,10 @@ import { A } from '@solidjs/router';
 import { createQuery } from '@tanstack/solid-query';
 import { createMemo, createSignal, For, Index, onCleanup, Show, type JSX } from 'solid-js';
 import { get } from '../api/client';
-import type { FrameEvent, FrameObjective, FramePlayer, LiveAssets, LiveFrame, LiveMatchInfo, LivePlayer } from '../api/types';
+import type { FrameEvent, FrameObjective, FramePlayer, FrameRift, LiveAssets, LiveFrame, LiveMatchInfo, LivePlayer } from '../api/types';
 import { auth } from '../lib/auth';
 import { clock, compact, tokens } from '../lib/format';
-import { TEAM_COLOR, TEAM_NAMES, TEAM_TEXT, heroOf, itemOf, objectiveIcon, toMap, useLiveAssets } from '../lib/live';
+import { RIFT_ICON, TEAM_COLOR, TEAM_NAMES, TEAM_TEXT, URN_ICON, abilityOf, heroOf, itemOf, objectiveIcon, toMap, useLiveAssets } from '../lib/live';
 import { useTopic } from '../lib/ws';
 import { HeroIcon, RankBadge, playerName } from './live';
 import { Badge, Button, Card, Spinner, Tabs } from './ui';
@@ -154,23 +154,151 @@ function ObjectiveMarker(props: { o: FrameObjective; at: [number, number] }) {
   );
 }
 
-/** The icon in front of an event: the objective's own icon for "objective fell", else a symbol. */
+const RIFT_COLOR = '#4fd1c5';
+const URN_COLOR = '#f5c451';
+
+/** The icon in front of an event: the objective's, rift's or urn's own icon, else a symbol. */
 function eventIcon(e: FrameEvent): JSX.Element {
-  if (e.type === 'objective_destroyed') {
-    const src = objectiveIcon(e.kind, e.team);
-    if (src) {
-      return (
-        <img
-          src={src}
-          alt=""
-          class={`size-5 rounded-md bg-ink-950 object-cover ${isGlyph(e.kind) ? 'p-0.5' : ''}`}
-          style={{ 'box-shadow': `0 0 0 1.5px ${objectiveColor(e.kind, e.team)}` }}
-          loading="lazy"
-        />
-      );
+  const framed = (src: string, color: string, glyph: boolean) => (
+    <img
+      src={src}
+      alt=""
+      class={`size-5 rounded-md bg-ink-950 ${glyph ? 'object-contain p-0.5' : 'object-cover'}`}
+      style={{ 'box-shadow': `0 0 0 1.5px ${color}` }}
+      loading="lazy"
+    />
+  );
+  switch (e.type) {
+    case 'objective_destroyed': {
+      const src = objectiveIcon(e.kind, e.team);
+      return src ? framed(src, objectiveColor(e.kind, e.team), isGlyph(e.kind)) : <span>💥</span>;
     }
+    case 'rift_appeared':
+    case 'rift_opened':
+    case 'rift_closed':
+      return framed(RIFT_ICON, RIFT_COLOR, true);
+    case 'rift_captured':
+      return framed(RIFT_ICON, TEAM_COLOR[e.team], true);
+    case 'urn_delivered':
+      return framed(URN_ICON, TEAM_COLOR[e.team], true);
+    case 'urn_spawned':
+    case 'urn_picked_up':
+    case 'urn_dropped':
+      return framed(URN_ICON, URN_COLOR, true);
+    case 'kill':
+      return <span>⚔</span>;
+    case 'purchase':
+      return <span>🛒</span>;
+    case 'level_up':
+      return <span>⬆</span>;
+    case 'ability_unlocked':
+      return <span title="Ability unlocked">🔓</span>;
+    case 'ability_upgraded':
+      return <span title="Ability point" class="font-bold text-gold-300">+</span>;
   }
-  return <span>{e.type === 'kill' ? '⚔' : e.type === 'purchase' ? '🛒' : e.type === 'level_up' ? '⬆' : '💥'}</span>;
+}
+
+/** What an event is about, on the right of the row: the item bought, or the ability with its points (of 3). */
+function eventExtra(e: FrameEvent, assets?: LiveAssets): JSX.Element | null {
+  const thing = (image: string | null, name: string, after?: JSX.Element) => (
+    <span class="flex shrink-0 items-center gap-1 text-ink-300">
+      <img src={image ?? ''} alt="" class="size-5 rounded bg-ink-800 object-contain" loading="lazy" />
+      <span class="max-w-24 truncate">{name}</span>
+      {after}
+    </span>
+  );
+  if (e.type === 'purchase') {
+    const item = itemOf(assets, e.item_id);
+    return item ? thing(item.image, item.name) : null;
+  }
+  if (e.type === 'ability_unlocked' || e.type === 'ability_upgraded') {
+    const ability = abilityOf(assets, e.ability_id);
+    if (!ability) return null;
+    const tier = e.type === 'ability_upgraded' ? e.tier : 0;
+    const pips = (
+      <span class="flex gap-0.5" title={`${tier} of 3 points`}>
+        <For each={[1, 2, 3]}>{(i) => <span class={`size-1.5 rounded-full ${i <= tier ? 'bg-gold-400' : 'bg-ink-700'}`} />}</For>
+      </span>
+    );
+    return thing(ability.image, ability.name, pips);
+  }
+  return null;
+}
+
+/**
+ * The Unstable Rift: dimmed with a dashed outline while it appears, then open with each team's capture progress as
+ * a bar below it (Hidden King on top).
+ */
+function RiftMarker(props: { r: FrameRift; at: [number, number] }) {
+  const s = 16;
+  const outer = s + 4;
+  const title = () => {
+    if (!props.r.open) return 'Unstable Rift · appearing';
+    const pct = props.r.progress.map((p) => `${Math.round(p * 100)}%`);
+    const left = props.r.closes_in_s != null ? ` · closes in ${Math.ceil(props.r.closes_in_s)} s` : '';
+    return `Unstable Rift · ${TEAM_NAMES[0]} ${pct[0]}, ${TEAM_NAMES[1]} ${pct[1]}${left}`;
+  };
+  return (
+    <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000})`} opacity={props.r.open ? 1 : 0.6}>
+      <title>{title()}</title>
+      <rect
+        x={-outer}
+        y={-outer}
+        width={outer * 2}
+        height={outer * 2}
+        rx={outer * 0.35}
+        fill="#0b0a10"
+        stroke={RIFT_COLOR}
+        stroke-width="3"
+        stroke-dasharray={props.r.open ? undefined : '6 5'}
+      />
+      <image href={RIFT_ICON} x={-s * 0.8} y={-s * 0.8} width={s * 1.6} height={s * 1.6} />
+      <Show when={props.r.open}>
+        <For each={[0, 1] as const}>
+          {(team) => (
+            <>
+              <rect x={-outer} y={outer + 4 + team * 7} width={outer * 2} height="5" rx="2" fill="rgb(0 0 0 / 0.7)" />
+              <rect x={-outer} y={outer + 4 + team * 7} width={outer * 2 * props.r.progress[team]} height="5" rx="2" fill={TEAM_COLOR[team]} />
+            </>
+          )}
+        </For>
+      </Show>
+    </g>
+  );
+}
+
+/** The Soul Urn lying on the ground. */
+function UrnMarker(props: { at: [number, number] }) {
+  const s = 13;
+  const outer = s + 4;
+  return (
+    <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000})`}>
+      <title>Soul Urn</title>
+      <rect x={-outer} y={-outer} width={outer * 2} height={outer * 2} rx={outer * 0.35} fill="#0b0a10" stroke={URN_COLOR} stroke-width="3" />
+      <image href={URN_ICON} x={-s * 0.85} y={-s * 0.85} width={s * 1.7} height={s * 1.7} />
+    </g>
+  );
+}
+
+/** Where the carried urn has to go: a dashed ring in the carrier's team colour. */
+function UrnDelivery(props: { at: [number, number]; color: string }) {
+  return (
+    <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000})`}>
+      <title>Soul Urn delivery point</title>
+      <circle r="22" fill="rgb(11 10 16 / 0.6)" stroke={props.color} stroke-width="3" stroke-dasharray="7 5" />
+      <image href={URN_ICON} x="-12" y="-12" width="24" height="24" opacity="0.6" />
+    </g>
+  );
+}
+
+/** A small urn on the carrier's hero marker (drawn above the heroes, top right of the carrier). */
+function UrnCarried(props: { at: [number, number] }) {
+  return (
+    <g transform={`translate(${props.at[0] * 1000 + 15} ${props.at[1] * 1000 - 15})`} class="pointer-events-none">
+      <circle r="10" fill="#0b0a10" stroke={URN_COLOR} stroke-width="2.5" />
+      <image href={URN_ICON} x="-7.5" y="-7.5" width="15" height="15" />
+    </g>
+  );
 }
 
 function HeroMarker(props: {
@@ -221,7 +349,7 @@ function HeroMarker(props: {
   );
 }
 
-function describe(e: FrameEvent, name: (id: number | null | undefined) => string): string {
+function describe(e: FrameEvent, name: (id: number | null | undefined) => string, ability: (id: number) => string): string {
   switch (e.type) {
     case 'kill':
       return e.killer ? `${name(e.killer)} killed ${name(e.victim)}` : `${name(e.victim)} died`;
@@ -229,8 +357,28 @@ function describe(e: FrameEvent, name: (id: number | null | undefined) => string
       return `${name(e.account_id)} bought`;
     case 'level_up':
       return `${name(e.account_id)} reached level ${e.level}`;
+    case 'ability_unlocked':
+      return `${name(e.account_id)} unlocked ${ability(e.ability_id)}`;
+    case 'ability_upgraded':
+      return `${name(e.account_id)} put a point into ${ability(e.ability_id)} (${e.tier} of 3)`;
     case 'objective_destroyed':
       return `${e.team != null ? TEAM_NAMES[e.team] : 'A'} ${e.kind.replace('_', ' ')} fell`;
+    case 'urn_spawned':
+      return 'The Soul Urn appeared';
+    case 'urn_picked_up':
+      return `${name(e.account_id)} picked up the Soul Urn`;
+    case 'urn_dropped':
+      return `${name(e.account_id)} dropped the Soul Urn`;
+    case 'urn_delivered':
+      return `${name(e.account_id)} delivered the Soul Urn for ${TEAM_NAMES[e.team]}`;
+    case 'rift_appeared':
+      return 'An Unstable Rift is appearing';
+    case 'rift_opened':
+      return 'The Unstable Rift opened';
+    case 'rift_captured':
+      return `${TEAM_NAMES[e.team]} captured the Unstable Rift`;
+    case 'rift_closed':
+      return 'The Unstable Rift closed without being captured';
   }
 }
 
@@ -264,6 +412,10 @@ function eventText(e: FrameEvent, tag: (id: number) => JSX.Element): JSX.Element
       return <>{tag(e.account_id)}{words('bought')}</>;
     case 'level_up':
       return <>{tag(e.account_id)}{words(`reached level ${e.level}`)}</>;
+    case 'ability_unlocked':
+      return <>{tag(e.account_id)}{words('unlocked')}</>;
+    case 'ability_upgraded':
+      return <>{tag(e.account_id)}{words('put a point into')}</>;
     case 'objective_destroyed':
       return (
         <span class="truncate">
@@ -271,6 +423,26 @@ function eventText(e: FrameEvent, tag: (id: number) => JSX.Element): JSX.Element
           {` ${e.kind.replace('_', ' ')} fell`}
         </span>
       );
+    case 'urn_spawned':
+      return <span class="truncate">The Soul Urn appeared</span>;
+    case 'urn_picked_up':
+      return <>{tag(e.account_id)}{words('picked up the Soul Urn')}</>;
+    case 'urn_dropped':
+      return <>{tag(e.account_id)}{words('dropped the Soul Urn')}</>;
+    case 'urn_delivered':
+      return <>{tag(e.account_id)}{words('delivered the Soul Urn')}</>;
+    case 'rift_appeared':
+      return <span class="truncate">An Unstable Rift is appearing</span>;
+    case 'rift_opened':
+      return <span class="truncate">The Unstable Rift opened</span>;
+    case 'rift_captured':
+      return (
+        <span class="truncate">
+          <span class={`font-medium ${TEAM_TEXT[e.team]}`}>{TEAM_NAMES[e.team]}</span> captured the Unstable Rift
+        </span>
+      );
+    case 'rift_closed':
+      return <span class="truncate">The Unstable Rift closed uncaptured</span>;
   }
 }
 
@@ -335,6 +507,15 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
   const at = (x: number, y: number) => toMap(x, y, radius(), play.view()?.frame.minimap);
   const players = () => play.view()?.frame.players ?? [];
   const selectedPlayer = () => players().find((p) => p.account_id === selected());
+  const abilityName = (id: number) => abilityOf(assets.data, id)?.name ?? 'an ability';
+  // The carried urn follows its carrier's (interpolated) marker.
+  const urnCarrier = () => play.view()?.frame.urn?.carrier ?? null;
+  const urnCarrierTeam = () => players().find((p) => p.account_id === urnCarrier())?.team ?? null;
+  const urnCarrierAt = (): [number, number] | null => {
+    const id = urnCarrier();
+    const xy = id == null ? undefined : play.view()?.pos.get(id);
+    return xy ? at(xy[0], xy[1]) : null;
+  };
   // Hero and team from the broadcast, or from the match's roster before the first frame.
   const who = (id: number): Who => {
     const live = players().find((p) => p.account_id === id);
@@ -390,6 +571,13 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
                     <Index each={play.view()?.frame.objectives ?? []}>
                       {(o) => <ObjectiveMarker o={o()} at={at(o().x, o().y)} />}
                     </Index>
+                    <Show when={play.view()?.frame.rift}>{(r) => <RiftMarker r={r()} at={at(r().x, r().y)} />}</Show>
+                    <Show when={play.view()?.frame.urn?.delivery}>
+                      {(d) => <UrnDelivery at={at(d()[0], d()[1])} color={urnCarrierTeam() == null ? URN_COLOR : TEAM_COLOR[urnCarrierTeam()!]} />}
+                    </Show>
+                    <Show when={play.view()?.frame.urn?.carrier == null && play.view()?.frame.urn}>
+                      {(u) => <UrnMarker at={at(u().x, u().y)} />}
+                    </Show>
                   </Show>
                   <Index each={players()}>
                     {(p) => (
@@ -407,6 +595,7 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
                       />
                     )}
                   </Index>
+                  <Show when={layers().objectives && urnCarrierAt()}>{(xy) => <UrnCarried at={xy()} />}</Show>
                 </svg>
                 <Show when={!play.view()}>
                   <div class="absolute inset-0 grid place-items-center bg-ink-950/70 text-center">
@@ -493,22 +682,15 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
               />
               <Show when={tab() === 'events'}>
                 <ol class="flex max-h-[560px] flex-col gap-1 overflow-y-auto pr-1">
-                  <For each={play.events()} fallback={<li class="py-8 text-center text-xs text-ink-500">Kills, purchases and objectives show up here.</li>}>
+                  <For each={play.events()} fallback={<li class="py-8 text-center text-xs text-ink-500">Kills, purchases, abilities, objectives, the urn and the rift show up here.</li>}>
                     {(e) => (
                       <li class="flex items-center gap-2 rounded-lg bg-ink-850 px-2.5 py-1.5 text-xs">
                         <span class="tabular w-10 shrink-0 font-mono text-ink-500">{clock(e.time_s)}</span>
                         <span class="grid w-5 shrink-0 place-items-center">{eventIcon(e)}</span>
-                        <span class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden text-ink-200" title={describe(e, heroName)}>
+                        <span class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden text-ink-200" title={describe(e, heroName, abilityName)}>
                           {eventText(e, (id) => <PlayerTag who={who(id)} assets={assets.data} />)}
                         </span>
-                        <Show when={e.type === 'purchase' ? itemOf(assets.data, (e as { item_id: number }).item_id) : null}>
-                          {(it) => (
-                            <span class="flex shrink-0 items-center gap-1 text-ink-300">
-                              <img src={it().image ?? ''} alt="" class="size-5 rounded" loading="lazy" />
-                              <span class="max-w-24 truncate">{it().name}</span>
-                            </span>
-                          )}
-                        </Show>
+                        {eventExtra(e, assets.data)}
                       </li>
                     )}
                   </For>

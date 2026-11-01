@@ -306,6 +306,8 @@ export interface LiveAssets {
   heroes: Record<string, { name: string; icon: string | null; minimap: string | null; color: [number, number, number] | null }>;
   ranks: Record<string, { name: string; image: string | null; color: string | null }>;
   items: Record<string, { name: string; image: string | null; tier: number | null; slot: string | null }>;
+  /** Heroes' own abilities (missing in assets the watcher cached before abilities were added). */
+  abilities?: Record<string, { name: string; image: string | null }>;
   map: { radius: number; image: string | null; lanes: { color: string; points: [number, number][] }[] };
 }
 
@@ -360,7 +362,36 @@ export type FrameEvent =
   | { type: 'kill'; time_s: number; victim: number; killer: number | null; assisters: number[] }
   | { type: 'purchase'; time_s: number; account_id: number; item_id: number }
   | { type: 'level_up'; time_s: number; account_id: number; level: number }
-  | { type: 'objective_destroyed'; time_s: number; kind: ObjectiveKind; team: 0 | 1 | null; lane: number | null };
+  | { type: 'ability_unlocked'; time_s: number; account_id: number; ability_id: number }
+  /** An ability point put into an ability: tier 1 to 3. */
+  | { type: 'ability_upgraded'; time_s: number; account_id: number; ability_id: number; tier: number }
+  | { type: 'objective_destroyed'; time_s: number; kind: ObjectiveKind; team: 0 | 1 | null; lane: number | null }
+  | { type: 'urn_spawned'; time_s: number }
+  | { type: 'urn_picked_up' | 'urn_dropped'; time_s: number; account_id: number }
+  | { type: 'urn_delivered'; time_s: number; account_id: number; team: 0 | 1 }
+  | { type: 'rift_appeared' | 'rift_opened' | 'rift_closed'; time_s: number }
+  | { type: 'rift_captured'; time_s: number; team: 0 | 1 };
+
+/** The Soul Urn while it is in play: on the ground, or carried (it then follows the carrier). */
+export interface FrameUrn {
+  x: number;
+  y: number;
+  carrier: number | null;
+  /** Where it has to be taken, once someone picked it up. */
+  delivery: [number, number] | null;
+}
+
+/** The Unstable Rift: appearing on a side-lane bridge, then open as a capture point. */
+export interface FrameRift {
+  x: number;
+  y: number;
+  open: boolean;
+  /** Capture progress per team (Hidden King first), 0 to 1. */
+  progress: [number, number];
+  capturers: [number, number];
+  /** Seconds until an open rift closes uncaptured. */
+  closes_in_s: number | null;
+}
 
 /** One realtime map frame (WebSocket topic watch:{deadlockMatchId}, type LIVE_FRAME), about twice a second. */
 export interface LiveFrame {
@@ -377,6 +408,9 @@ export interface LiveFrame {
   winning_team: number | null;
   players: FramePlayer[];
   objectives: FrameObjective[];
+  /** Absent in frames from bots older than the urn and rift. */
+  urn?: FrameUrn | null;
+  rift?: FrameRift | null;
   events: FrameEvent[];
   received_at: number;
 }

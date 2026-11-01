@@ -1,4 +1,4 @@
-"""Downloads item and objective icons from the Deadlock Wiki (deadlock.wiki) for the realtime map.
+"""Downloads item, ability and objective icons from the Deadlock Wiki (deadlock.wiki) for the realtime map.
 
     python scripts/wiki_icons.py        (from frontend/, needs Pillow: pip install pillow)
 
@@ -31,6 +31,8 @@ OBJECTIVES = {
     'patron-0': 'Hidden King alt icon.png',
     'patron-1': 'Archmother alt icon.png',
     'midboss': 'Rejuvenator.png',
+    'rift': 'Unstable Rift.png',
+    'urn': 'Soul Urn.png',
 }
 
 
@@ -53,23 +55,46 @@ def category_files(category):
         cont = d['continue']
 
 
-def file_urls(titles, min_width=0):
-    """URLs of the wiki files that exist among `titles` and are at least `min_width` px wide (asked 50 at a time)."""
+def file_urls(titles, min_width=0, max_width=10_000):
+    """URLs of the wiki files that exist among `titles` and are min_width to max_width px wide (asked 50 at a time)."""
     titles, urls = list(titles), {}
     for i in range(0, len(titles), 50):
         d = api(action='query', titles='|'.join('File:' + t for t in titles[i:i + 50]), prop='imageinfo', iiprop='url|size')
         # The API reports titles with underscores turned back into spaces; map them back to what was asked.
         asked = {t.replace('_', ' '): t for t in titles[i:i + 50]}
         for p in d['query']['pages'].values():
-            if p.get('imageinfo') and p['imageinfo'][0]['width'] >= min_width:
+            if p.get('imageinfo') and min_width <= p['imageinfo'][0]['width'] <= max_width:
                 title = p['title'].removeprefix('File:')
                 urls[asked.get(title, title)] = p['imageinfo'][0]['url']
     return urls
 
 
-def shop_item_names():
+def asset_names():
+    """Shop item names and hero ability names (signature and ultimate), from deadlock-api."""
     with urllib.request.urlopen(urllib.request.Request(ITEMS, headers=UA), timeout=60) as r:
-        return sorted({i['name'] for i in json.load(r) if i.get('type') == 'upgrade' and i.get('name')})
+        rows = json.load(r)
+    items = sorted({i['name'] for i in rows if i.get('type') == 'upgrade' and i.get('name')})
+    abilities = sorted({i['name'] for i in rows if i.get('type') == 'ability' and i.get('name')
+                        and i.get('ability_type') in ('signature', 'ultimate')})
+    return items, abilities
+
+
+def import_icons(category, folder, names, size_range):
+    """The category's icons, plus those of `names` it misses whose file (named after them) is `size_range` px wide."""
+    icons = {}
+    for title, url in sorted(category_files(category).items()):
+        name = re.sub(r'\s*\((item|ability)\)$', '', title.rsplit('.', 1)[0])
+        save_icon(url, OUT / folder / f'{slug(name)}.webp')
+        icons[key(name)] = slug(name)
+    from_category = len(icons)
+    others = [n for n in names if key(n) not in icons]
+    found = file_urls((f'{n}.png' for n in others), *size_range)
+    for name in others:
+        if f'{name}.png' in found:
+            save_icon(found[f'{name}.png'], OUT / folder / f'{slug(name)}.webp')
+            icons[key(name)] = slug(name)
+    print(f'{folder}: {from_category} icons from the category, {len(icons)} in all')
+    return icons
 
 
 def save_icon(url, dest):
@@ -93,22 +118,12 @@ def slug(name):
 
 
 def main():
-    items = {}
-    for title, url in sorted(category_files('Item_icons').items()):
-        name = re.sub(r'\s*\(item\)$', '', title.rsplit('.', 1)[0])
-        save_icon(url, OUT / 'items' / f'{slug(name)}.webp')
-        items[key(name)] = slug(name)
-    print(f'{len(items)} item icons from the category')
-
-    # Many current items have an icon named after them that isn't in the category. The current art is 200 px;
-    # smaller files with an item's name are old glyphs or other pictures, so those items keep deadlock-api's icon.
-    others = [n for n in shop_item_names() if key(n) not in items]
-    found = file_urls((f'{n}.png' for n in others), min_width=200)
-    for name in others:
-        if f'{name}.png' in found:
-            save_icon(found[f'{name}.png'], OUT / 'items' / f'{slug(name)}.webp')
-            items[key(name)] = slug(name)
-    print(f'{len(items)} item icons in all')
+    item_names, ability_names = asset_names()
+    # Many current items and abilities have an icon named after them that isn't in the category. Current item art
+    # is 200 px (smaller files with an item's name are old glyphs); ability icons are 128-137 px (bigger files with
+    # an ability's name are other pictures, like an item that shares the name).
+    items = import_icons('Item_icons', 'items', item_names, (200, 10_000))
+    abilities = import_icons('Ability_icons', 'abilities', ability_names, (100, 160))
 
     urls = file_urls(OBJECTIVES.values())
     for kind, title in OBJECTIVES.items():
@@ -121,6 +136,11 @@ def main():
         '/** Item name (see `wikiKey`) -> icon file in /icons/items/. */',
         'export const ITEM_ICONS: Record<string, string> = {',
         *[f"  {k}: '{v}'," for k, v in sorted(items.items())],
+        '};',
+        '',
+        '/** Hero ability name (see `wikiKey`) -> icon file in /icons/abilities/. */',
+        'export const ABILITY_ICONS: Record<string, string> = {',
+        *[f"  {k}: '{v}'," for k, v in sorted(abilities.items())],
         '};',
         '',
         '/** The lookup key of an item name: lower case letters and digits only. */',
