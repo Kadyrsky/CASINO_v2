@@ -64,6 +64,20 @@ public class AdminController {
         audit("MATCH_VOIDED", id, Map.of());
     }
 
+    public record PremiumRequest(@NotNull Boolean premium) {}
+
+    /** Premium players may watch any live match on the realtime map. */
+    @PostMapping("/api/admin/users/{id}/premium")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Transactional
+    public void setPremium(@PathVariable UUID id, @Valid @RequestBody PremiumRequest req) {
+        int n = jdbc.sql("UPDATE users SET premium = ?, updated_at = now() WHERE id = ?").params(req.premium(), id).update();
+        if (n == 0) {
+            throw new win.naebka.common.Exceptions.NotFoundException("User");
+        }
+        audit("USER_PREMIUM_SET", id, Map.of("premium", req.premium()));
+    }
+
     @GetMapping("/api/admin/health")
     public Map<String, Object> health() {
         Map<String, Object> out = new LinkedHashMap<>();
@@ -72,6 +86,9 @@ public class AdminController {
         // Which live-match source the watcher used last: "deadlock-api" or "deadlock-bot".
         out.put("watcherSource", redis.opsForValue().get("watcher:source"));
         out.putAll(reportSources.health());
+        // Broadcasts the Steam bot is following for the realtime map (deadlock-bot/src/feeds.rs).
+        String feeds = redis.opsForValue().get("live:feeds");
+        out.put("liveFeeds", feeds == null ? null : Json.read(feeds));
         out.put("matchesByStatus", jdbc.sql("SELECT status, count(*) FROM matches GROUP BY status")
                 .query((rs, i) -> Map.entry(rs.getString(1), rs.getLong(2))).list().stream()
                 .collect(java.util.stream.Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));

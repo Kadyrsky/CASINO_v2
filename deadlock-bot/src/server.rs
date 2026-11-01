@@ -74,6 +74,14 @@ pub enum CallError {
     Failed(String),
 }
 
+/// Why [`Server::spectate`] gave no broadcast.
+#[derive(Debug)]
+pub enum Spectate {
+    /// The spectate wait isn't over: seconds left.
+    TooSoon(u64),
+    Failed(CallError),
+}
+
 /// What the server needs from Steam. [`SteamBackend`] is the real one; tests use a fake.
 pub trait Backend: Send + Sync + 'static {
     fn active(&self) -> impl Future<Output = Result<Value, CallError>> + Send;
@@ -370,27 +378,30 @@ impl<B: Backend> Server<B> {
     }
 
     async fn live_url(&self, match_id: u64) -> Response {
+        match self.spectate(match_id).await {
+            Ok(value) => ok(value),
+            Err(Spectate::TooSoon(wait)) => too_many_requests(wait, "a match was spectated moments ago"),
+            Err(Spectate::Failed(CallError::Answer(GcAnswer::NotReady(message)))) => not_ready(&message, None),
+            Err(Spectate::Failed(e)) => error_response(&e),
+        }
+    }
+
+    /// The broadcast of a live match, from the cache or by spectating it (within the spectate wait).
+    pub async fn spectate(&self, match_id: u64) -> Result<Value, Spectate> {
         {
             let spectates = self.spectates.lock().unwrap_or_else(|e| e.into_inner());
             if let Some((at, value)) = spectates.get(&match_id)
                 && at.elapsed() < self.limits.spectate_ttl
             {
-                return ok(value.clone());
+                return Ok(value.clone());
             }
         }
-        if let Err(wait) = self.permit("spectate", self.limits.spectate) {
-            return too_many_requests(wait, "a match was spectated moments ago");
-        }
-        match self.backend.spectate(match_id).await {
-            Ok(value) => {
-                let mut spectates = self.spectates.lock().unwrap_or_else(|e| e.into_inner());
-                spectates.retain(|_, (at, _)| at.elapsed() < self.limits.spectate_ttl);
-                spectates.insert(match_id, (Instant::now(), value.clone()));
-                ok(value)
-            }
-            Err(CallError::Answer(GcAnswer::NotReady(message))) => not_ready(&message, None),
-            Err(e) => error_response(&e),
-        }
+        self.permit("spectate", self.limits.spectate).map_err(Spectate::TooSoon)?;
+        let value = self.backend.spectate(match_id).await.map_err(Spectate::Failed)?;
+        let mut spectates = self.spectates.lock().unwrap_or_else(|e| e.into_inner());
+        spectates.retain(|_, (at, _)| at.elapsed() < self.limits.spectate_ttl);
+        spectates.insert(match_id, (Instant::now(), value.clone()));
+        Ok(value)
     }
 }
 
@@ -542,7 +553,12 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// Runs the server until Ctrl+C or SIGTERM (`docker stop`), then closes the Steam session.
-pub async fn serve(listen: SocketAddr, token: Option<String>, idle: Duration) -> Result<()> {
+pub async fn serve(
+    listen: SocketAddr,
+    token: Option<String>,
+    idle: Duration,
+    feeds: Option<crate::feeds::Config>,
+) -> Result<()> {
     let state_dir = auth::state_dir()?;
     std::fs::create_dir_all(&state_dir)
         .with_context(|| format!("could not create {}", state_dir.display()))?;
@@ -562,11 +578,12 @@ pub async fn serve(listen: SocketAddr, token: Option<String>, idle: Duration) ->
         );
     }
     let server = Arc::new(Server::new(
-        SteamBackend::new(http, idle),
+        SteamBackend::new(http.clone(), idle),
         Limits::default(),
         state_dir,
         token,
     ));
+    let feeds_task = feeds.map(|cfg| tokio::spawn(crate::feeds::run(cfg, server.clone(), http)));
 
     let idle_closer = {
         let server = server.clone();
@@ -587,6 +604,9 @@ pub async fn serve(listen: SocketAddr, token: Option<String>, idle: Duration) ->
         .await?;
 
     idle_closer.abort();
+    if let Some(task) = feeds_task {
+        task.abort();
+    }
     server.backend.shutdown().await;
     log::info!("stopped");
     Ok(())

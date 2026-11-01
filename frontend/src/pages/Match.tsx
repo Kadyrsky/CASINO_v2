@@ -5,6 +5,8 @@ import { get } from '../api/client';
 import type { Market, MatchDetail, MatchEventView, MatchState, OddsPoint } from '../api/types';
 import { BetSlip } from '../components/BetSlip';
 import { Chat } from '../components/Chat';
+import { LiveMap } from '../components/LiveMap';
+import { RankBadge, Roster } from '../components/live';
 import {
   MatchClock,
   NetWorthBar,
@@ -18,6 +20,7 @@ import {
 import { Badge, Card, Empty, Spinner } from '../components/ui';
 import { betslip } from '../lib/betslip';
 import { clock, compact, dateTime, humanize, odds } from '../lib/format';
+import { TEAM_TEXT, regionLabel, useLiveAssets } from '../lib/live';
 import { useTopic } from '../lib/ws';
 
 const TEAM_NAMES = ['Hidden King', 'Archmother'];
@@ -107,6 +110,13 @@ export default function MatchPage() {
   const match = () => detail.data?.match;
   const elapsed = useMatchClock(match);
   const label = () => `Match ${match()?.externalId ?? ''}`;
+  const assets = useLiveAssets();
+  const teamBadge = (team: 0 | 1) => {
+    const b = (match()?.players ?? []).filter((p) => p.team === team && p.badge).map((p) => p.badge!);
+    if (!b.length) return null;
+    const mean = Math.round(b.map((x) => Math.floor(x / 10) * 6 + (x % 10) - 1).reduce((s, v) => s + v, 0) / b.length);
+    return Math.floor(mean / 6) * 10 + (mean % 6) + 1;
+  };
 
   useTopic(
     () => `match:${params.id}`,
@@ -143,10 +153,10 @@ export default function MatchPage() {
               <div class="flex flex-wrap items-center justify-between gap-2 border-b border-ink-700/60 px-5 py-3">
                 <div class="flex items-center gap-3">
                   <StatusBadge status={m().status} />
-                  <span class="text-xs text-ink-400">Deadlock · #{m().externalId}</span>
+                  <span class="text-xs text-ink-400">Deadlock · {regionLabel(m().meta?.region)} · #{m().externalId}</span>
                 </div>
                 {/* Honest latency badge (Risk #1, F3): public data lags the in-game spectator view. */}
-                <Badge tone="neutral" class="normal-case tracking-normal">⏱ Data delay ≥ 60 s</Badge>
+                <Badge tone="neutral" class="normal-case tracking-normal">⏱ Data 20–60 s behind the game</Badge>
               </div>
               <div class="grid grid-cols-[1fr_auto_1fr] items-center gap-4 px-5 py-6">
                 <div>
@@ -181,6 +191,28 @@ export default function MatchPage() {
                 <p class="bg-warn/10 px-5 py-2 text-sm text-warn">Result under manual review: {humanize(m().reviewReason)}</p>
               </Show>
             </Card>
+
+            {/* Rosters: heroes, Steam names and ranks */}
+            <Show when={m().players?.length}>
+              <Card title="Teams">
+                <div class="grid gap-6 p-4 md:grid-cols-2">
+                  {([0, 1] as const).map((team) => (
+                    <div>
+                      <div class={`mb-2 flex items-center gap-2 ${team === 1 ? 'flex-row-reverse text-right' : ''}`}>
+                        <RankBadge assets={assets.data} badge={teamBadge(team)} size="md" />
+                        <span class={`font-bold ${TEAM_TEXT[team]}`}>{TEAM_NAMES[team]}</span>
+                      </div>
+                      <Roster assets={assets.data} players={m().players ?? []} team={team} />
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            </Show>
+
+            {/* Realtime map (needs a bet on this match, or premium) */}
+            <Show when={m().status === 'LIVE' || m().status === 'STALE'}>
+              <LiveMap externalId={m().externalId} roster={m().players} />
+            </Show>
 
             {/* Markets */}
             <div class="grid gap-4 md:grid-cols-2">

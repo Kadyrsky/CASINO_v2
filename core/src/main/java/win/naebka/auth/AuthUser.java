@@ -27,4 +27,10 @@ public record AuthUser(UUID id, String username, String role, UUID sessionId) {
         }
         throw new Exceptions.DomainException(ErrorCode.UNAUTHORIZED, "Authentication required");
     }
+
+    /** The caller on a public endpoint, or null when nobody is logged in. */
+    public static AuthUser currentOrNull() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return auth instanceof JwtAuthenticationToken token ? fromJwt(token.getToken()) : null;
+    }
 }

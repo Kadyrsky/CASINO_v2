@@ -97,6 +97,12 @@ naebka:
     token: ""
     # Covers a Steam login when the bot's session is closed.
     timeout-seconds: 30
+  # Realtime map (deadlock-bot follows the broadcasts). Admins and premium players may always watch; others need this
+  # many tokens staked on the match (0 = any logged-in player). Frames reach viewers delay-seconds after the core gets
+  # them, so markets suspend first.
+  live-view:
+    min-stake-tokens: 100
+    delay-seconds: 5
   # MetaMask + Sepolia deposits (course web3 lab). Sepolia ETH is test money, so this stays PLAY_MONEY.
   eth:
     chain-id: 11155111

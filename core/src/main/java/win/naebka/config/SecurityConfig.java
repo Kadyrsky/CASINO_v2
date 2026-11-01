@@ -42,7 +42,7 @@ public class SecurityConfig {
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(a -> a
                         .requestMatchers(HttpMethod.POST, "/api/auth/register", "/api/auth/login", "/api/auth/steam").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/config", "/api/matches/**", "/api/slots/games",
+                        .requestMatchers(HttpMethod.GET, "/api/config", "/api/matches/**", "/api/live/**", "/api/slots/games",
                                 "/api/slots/jackpot", "/api/poker/tables/**", "/api/chat/rooms/**").permitAll()
                         .requestMatchers("/api/docs/**", "/api/openapi.json/**", "/swagger-ui/**", "/actuator/health",
                                 "/ws/**").permitAll()

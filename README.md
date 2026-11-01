@@ -26,7 +26,7 @@ Live matches appear within ~10 s: the watcher picks fresh ranked games from `api
 | `redis` | 56379 | Redis 7: message broker and WebSocket fan-out |
 | `watcher` | – | Python: polls the Deadlock API and publishes normalized match events |
 | `odds-engine` | – | Python: prices markets from the event stream |
-| `deadlock-bot` | – | Optional (`--profile bot`). Rust Steam bot: answers when deadlock-api says "too many requests" ([below](#steam-bot-fallback)) |
+| `deadlock-bot` | – | Optional (`--profile bot`). Rust Steam bot: follows match broadcasts for the [realtime map](#live-matches-and-the-realtime-map) and answers when deadlock-api says "too many requests" ([below](#steam-bot-fallback)) |
 
 The admin account (manual-review queue and integrity dashboard at `/admin`) comes from `.env.example`
 (`NAEBKA_ADMIN_USERNAME` / `NAEBKA_ADMIN_PASSWORD`). Copy it to `.env` to change values.
@@ -195,6 +195,54 @@ flowchart LR
 7. **Watchdogs**: no watcher data for 60 s → STALE and suspended. Stale for 20 min → ended and settled from the
    report.
 
+## Live matches and the realtime map
+
+**All live matches** (lobby, below "Bet live"): every match of the in-game Watch tab (up to 200) with each
+player's hero, Steam name and rank badge, each team's average rank, souls, the match clock, and filters for region,
+mode and player, plus the rank spread. It refreshes every 30 s. Matches you can bet on are marked and open their
+betting page; the others open `/live/{matchId}`.
+
+**Realtime map** (match page and `/live/{matchId}`): the minimap with every hero (portrait, team ring, health bar,
+respawn timer), the lanes and the objectives with their health. Next to it are tabs for **events** (kills,
+purchases, level-ups, objectives destroyed), **stats** (level, K/D/A, souls, health, rank; click a hero for its
+items) and **souls** (the lead over time). It plays about 25 s behind the real game: Valve's broadcast delay (about
+21 s) plus a few seconds of smoothing. You can pause and jump back to live.
+
+Item and objective icons are the game's current art from the [Deadlock Wiki](https://deadlock.wiki), stored as small
+WebP files in `frontend/public/icons/`. Refresh them after a patch with `python frontend/scripts/wiki_icons.py` (needs
+Pillow). Items the wiki has no icon for keep deadlock-api's.
+
+Who may watch: admins and premium players (`POST /api/admin/users/{id}/premium {"premium": true}`) can watch every
+match. Other logged-in players can watch a match once they have at least `LIVE_VIEW_MIN_STAKE_TOKENS` (100) staked on
+it. Set it to 0 to open the map to every logged-in player.
+
+How it works:
+
+```mermaid
+flowchart LR
+  V[(Valve broadcast relay)] -->|HTTP fragments, ~3 s each| B[deadlock-bot<br/>haste parser]
+  B -->|live:frame + naebka:live-frames| R[(Redis)]
+  R --> W[Watcher] -->|state from frames: odds| R
+  R --> C[Core: LiveFrameRelay<br/>+5 s] -->|watch:matchId| UI[Browser map]
+  DL[(deadlock-api)] -->|names, ranks, assets| W -->|live:directory| R
+```
+
+* **Directory** (`live/naebka_live/directory.py`): after each poll the watcher adds Steam names
+  (`/v1/players/steam`) and ranks (`/v1/players/rank`), batched 1000 at a time and cached in Redis (names 24 h,
+  ranks 1 h), so a full list costs a few requests an hour. Hero, rank and item images and the map come from
+  deadlock-api's assets every 6 h. The core serves them at `GET /api/live/directory`, `/api/live/assets` and
+  `/api/live/matches/{id}`.
+* **Feeds** (`deadlock-bot/src/feeds.rs`, `src/live.rs`): the bot follows the broadcasts of the watcher's tracked
+  matches and of any match a viewer has open (up to `DEADLOCK_BOT_MAX_FEEDS`, 12), one parser thread each. Broadcast
+  URLs come from deadlock-api's public list, or from spectating with the bot (one per 5 minutes). Every frame (twice
+  a second) goes to Redis.
+* **Odds from the broadcast**: for tracked matches with a feed, the watcher uses the broadcast state instead of the
+  live list, which is 2–4 minutes old. That includes Valve's own objective bitmasks, so the numbers are on the same
+  scale as the list's. Objectives and souls swings therefore suspend markets within about 2 s of the broadcast
+  showing them, not minutes later.
+* **Courtsiding defence**: the core holds every frame for `LIVE_VIEW_DELAY_SECONDS` (5) before sending it to viewers,
+  so markets are suspended before anyone watching sees the event that suspended them.
+
 ## Steam bot fallback
 
 deadlock-api limits each IP. The live match list allows 100 requests/s (and is cached for 120 s), but a match
@@ -267,18 +315,21 @@ Germany, Hungary, Montenegro, Slovenia, Portugal, Belgium, Ireland, Bulgaria, Gr
 # Java: 72 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules,
 # deadlock-api -> Steam bot fallback, Ethereum signatures, deposit-log parsing, payout encoding and signing)
 cd core && mvn test
-# + 36 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
+# + 40 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
 cd core && mvn -Pit test
 
-# Python: 28 tests, mypy --strict
+# Python: 36 tests, mypy --strict
 cd live && python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"   # bin/ on Linux/macOS
 .venv/Scripts/python -m pytest && .venv/Scripts/python -m mypy naebka_live tests
 
 # Frontend (no local Node needed)
 docker run --rm -v "$PWD/frontend:/app" -w /app node:22-alpine sh -c "npm install && npx tsc --noEmit && npx vp lint src && npm run build"
 
-# Java: 72 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules,
-# deadlock-api -> Steam bot fallback, Ethereum signatures, deposit-log parsing, payout encoding and signing)
+# Steam bot: 27 unit tests (needs Rust and protoc, see deadlock-bot/README.md)
+cd deadlock-bot && cargo test
+
+# Cashier contract: 17 Hardhat tests (no local Node needed)
+docker run --rm -v "$PWD/contracts:/app" -w /app node:22-alpine sh -c "npm ci && npx hardhat test"
 ```
 
 What the integration tests prove (Definition of Done: "end-to-end simulated match flows: place, suspend, reprice,
@@ -296,6 +347,8 @@ settle" via the scripted `MatchSimulator`):
   a reverted payout is refunded once, but not when the contract says it was already paid; a paused contract makes
   it wait; the same Idempotency-Key never takes tokens twice; KYC, a linked address and the contract's limits are
   required.
+* Realtime map: only admins, premium players and players with a big enough bet may watch; rosters are stored with
+  the match and shown with names and ranks; the directory links matches that can be bet on.
 * HTTP: RFC 7807 errors, logout revokes the JWT, slot spin is verifiable after seed rotation, poker buy-in/cash-out.
 
 ## Where each design document lives in the code
