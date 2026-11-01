@@ -1,12 +1,15 @@
-import { Navigate, Route, Router } from '@solidjs/router';
+import { Route, Router } from '@solidjs/router';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import { lazy } from 'solid-js';
 import Layout from './components/Layout';
 import { RequireAuth } from './components/RequireAuth';
+import Lobby from './pages/Lobby';
 
 // Game screens are loaded on demand (Frontend doc: mindful loading of game-specific functionality).
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
+const MatchPage = lazy(() => import('./pages/Match'));
+const Bets = lazy(() => import('./pages/Bets'));
 const WalletPage = lazy(() => import('./pages/Wallet'));
 
 const queryClient = new QueryClient({
@@ -17,9 +20,11 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <Router root={Layout}>
-        <Route path="/" component={() => <Navigate href="/wallet" />} />
+        <Route path="/" component={Lobby} />
         <Route path="/login" component={Login} />
         <Route path="/register" component={Register} />
+        <Route path="/matches/:id" component={MatchPage} />
+        <Route path="/bets" component={() => <RequireAuth><Bets /></RequireAuth>} />
         <Route path="/wallet" component={() => <RequireAuth><WalletPage /></RequireAuth>} />
         <Route path="*" component={() => <p class="py-24 text-center text-ink-400">Page not found.</p>} />
       </Router>
