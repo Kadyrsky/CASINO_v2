@@ -1,0 +1,26 @@
+[project]
+name = "naebka-live"
+version = "0.1.0"
+description = "Naebka live data services: Deadlock watcher (ingestion) and heuristic odds engine"
+requires-python = ">=3.12"
+dependencies = [
+    "redis>=5.0,<7",
+    "httpx>=0.27,<1",
+]
+
+[project.optional-dependencies]
+dev = ["mypy>=1.11", "pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["naebka_live"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

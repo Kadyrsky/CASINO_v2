@@ -15,6 +15,7 @@ docker compose up --build
 ```
 
 Open <http://localhost:8080>, register (18+, licensed country), and you start with 1,000 NTK.
+To withdraw, verify your identity under **Profile & verification** in the account menu (see [KYC](#kyc)).
 Live matches appear within ~10 s: the watcher picks fresh ranked games from `api.deadlock-api.com`.
 
 | Service | Port (host) | What it is |
@@ -25,9 +26,134 @@ Live matches appear within ~10 s: the watcher picks fresh ranked games from `api
 | `redis` | 56379 | Redis 7: message broker and WebSocket fan-out |
 | `watcher` | – | Python: polls the Deadlock API and publishes normalized match events |
 | `odds-engine` | – | Python: prices markets from the event stream |
+| `deadlock-bot` | – | Optional (`--profile bot`). Rust Steam bot: follows match broadcasts for the [realtime map](#live-matches-and-the-realtime-map) and answers when deadlock-api says "too many requests" ([below](#steam-bot-fallback)) |
 
 The admin account (manual-review queue and integrity dashboard at `/admin`) comes from `.env.example`
 (`NAEBKA_ADMIN_USERNAME` / `NAEBKA_ADMIN_PASSWORD`). Copy it to `.env` to change values.
+
+## MetaMask + Sepolia deposits and withdrawals (web3)
+
+Players connect MetaMask, deposit **Sepolia test ETH** to get play tokens (0.001 ETH = 100 NTK by default), and
+withdraw tokens back to their wallet as Sepolia ETH. Sepolia ETH has no value, so the platform stays in `PLAY_MONEY`
+mode. It follows the course web3 lab: the same Remix settings, the Sepolia chain check (11155111 / `0xaa36a7`), and
+the connection safeguards from the lab's `shared/wallet.js` (ported to `frontend/src/lib/eth.ts`).
+
+Deposits are off until a cashier contract address is configured; withdrawals also need an operator key.
+
+### The contract: `contracts/src/NaebkaCashier.sol`
+
+| Function | Who and what |
+|---|---|
+| `deposit()` | Anyone, 0.0001–0.05 ETH. Emits `Deposited(player, amount)`, which the core credits. Plain transfers are rejected. |
+| `payout(to, amount, withdrawalId)` | The **operator** (the server's key) or the owner. At most 0.05 ETH per payout and `dailyPayoutLimit` (0.5 ETH) per UTC day; each `withdrawalId` is paid once. |
+| `pause()` / `unpause()` | The operator or the owner can pause (deposits and payouts stop); only the owner resumes. |
+| `setOperator`, `setDailyPayoutLimit`, `fund`, `withdrawHouse` | Owner only. |
+| `transferOwnership` → `acceptOwnership` | Two steps, so ownership can't be lost to a typo. |
+
+The operator exists so the server never holds the owner key: the owner stays in MetaMask, and a leaked server key
+could pay out at most the daily limit before someone pauses the contract.
+
+Tests (17, Hardhat; no local Node needed):
+
+```bash
+docker run --rm -v "$PWD/contracts:/app" -w /app node:22-alpine sh -c "npm ci && npx hardhat test"
+```
+
+### 1. Deploy the contract (once)
+
+**From Remix** (as in the lab):
+
+1. Open `contracts/src/NaebkaCashier.sol` in [Remix](https://remix.ethereum.org). Compiler **0.8.24**, optimiser on,
+   **200 runs**, EVM **Shanghai**.
+2. Test in Remix VM first: `deposit` with Value 0.001 ether works; Value 0 or 1 ether reverts `AmountOutOfRange`;
+   `payout` from a second account reverts `OnlyOperator`, and works after `setOperator(<second account>)`.
+3. Switch the environment to **Browser Extension** (MetaMask on Sepolia) and deploy with **Value = 0**. The deploying
+   account becomes `owner`.
+4. Copy the contract address from *Deployed Contracts* (not the account address or the transaction hash), and the
+   block number of the deployment transaction from Etherscan.
+5. For withdrawals: create a second MetaMask account for the server (the operator) and send it a little Sepolia ETH
+   for gas. Call `setOperator(<its address>)`, then `fund` the contract with some Sepolia ETH (Value = 0.2 ether, say).
+
+**Or with Hardhat**: `contracts/scripts/deploy.js` does steps 3–5 and prints the `.env` lines:
+
+```bash
+docker run --rm -v "$PWD/contracts:/app" -w /app \
+  -e DEPLOYER_PRIVATE_KEY=0x... -e OPERATOR_ADDRESS=0x... -e FUND_ETH=0.2 \
+  node:22-alpine sh -c "npm ci && npm run deploy:sepolia"
+```
+
+`contracts/NaebkaCashier.abi.json` is the compiled ABI (`npm run abi` regenerates it), for Remix "At Address" or
+Etherscan.
+
+### 2. Configure and start
+
+```bash
+cp .env.example .env
+# deposits:    NAEBKA_ETH_CONTRACT_ADDRESS=0x...  NAEBKA_ETH_DEPLOY_BLOCK=<block>
+# withdrawals: NAEBKA_ETH_OPERATOR_KEY=0x<private key of the operator account>
+docker compose up --build
+```
+
+The operator key must belong to a **Sepolia test account only**. It pays the gas for payouts; the ETH itself comes
+from the contract. Never use a key that holds real money. Optional: `NAEBKA_ETH_RPC_URL` (default: the public
+`ethereum-sepolia-rpc.publicnode.com`; an Infura or Alchemy Sepolia URL is more reliable),
+`NAEBKA_ETH_TOKENS_PER_ETH`, `NAEBKA_ETH_CONFIRMATIONS` (default 3), `NAEBKA_ETH_MAX_FEE_GWEI` (default 50).
+If players open the site at an address other than `http://localhost:8080`, set `NAEBKA_ETH_SIWE_DOMAIN` and
+`NAEBKA_ETH_SIWE_URI` to match, or MetaMask warns that the sign-in message is for another site.
+
+### 3. Play
+
+Wallet page → **Sepolia test ETH** card:
+
+1. **Connect MetaMask** (switch to Sepolia if asked).
+2. **Link this address**: MetaMask asks you to sign a Sign-In with Ethereum message. Signing is free and sends no
+   transaction; it proves you hold the key, so nobody can link your address to their account.
+3. **Deposit**: approve the transaction. The Etherscan link appears as soon as it is submitted. The core credits the
+   tokens once the block is 3 confirmations deep (about a minute).
+4. **Withdraw** (needs a verified identity, like every withdrawal): enter an amount in NTK. The tokens are taken at
+   once, and the ETH arrives at the linked address within a minute or two. MetaMask doesn't have to be open: the server
+   sends the transaction.
+
+How it works:
+
+* `eth/EthDepositPoller` polls `eth_getLogs` for `Deposited` events. It saves the events of a block range and its
+  "last processed block" cursor in one database transaction, so after a crash the range is read again and the
+  unique (chain, tx, log index) key turns the repeat into a no-op. It deliberately does not use Redis pub/sub,
+  which drops messages while the core is down.
+* `eth/EthDepositService` credits through `WalletService` with the idempotency key
+  `deposit:eth:<chain>:<tx>:<logIndex>`, so the append-only ledger, responsible-gambling limits and the KYC deposit
+  cap all apply (the `deposit:` prefix is what the KYC cap counts). A deposit from an address nobody has linked
+  waits as `unlinked` and is credited when someone links it. A deposit over a deposit limit or the unverified KYC
+  cap, during self-exclusion, or above the max single deposit is `held`. The ETH is already on chain, so it is kept,
+  never refused.
+* `eth/EthWithdrawalService` takes the tokens with the ledger key `withdrawal:eth:<user>:<Idempotency-Key>` and
+  stores a `pending` withdrawal in the same transaction, so a retried request never takes them twice.
+* `eth/EthPayoutSender` pays one withdrawal at a time. It first asks the node to estimate `payout()`: if the contract
+  would refuse (paused, daily limit, not enough ETH in it, operator not set), the withdrawal waits and shows why. It
+  signs an EIP-1559 transaction with the operator key (`eth/EthPayout`), saves it as `sent` with its hash, and only
+  then broadcasts it. Mined and 3 blocks deep: `confirmed`. Reverted: `failed` and the tokens are refunded, unless
+  `paid(withdrawalId)` on the contract says an earlier transaction paid it. Not mined in 5 minutes: broadcast again.
+  Not mined in an hour: `review`.
+* Admins see unlinked and held deposits, open withdrawals, the operator's and the contract's balances, and the pause
+  state at `GET /api/admin/eth`. `POST /api/admin/eth/deposits/{id}/retry` re-runs a deposit's checks (for example
+  after the player is KYC-verified). `POST /api/admin/eth/withdrawals/{id}/retry` sends a withdrawal in review again;
+  the contract refuses to pay the same id twice.
+
+Lab-style test (accounts A and B in MetaMask, both with Sepolia ETH; the contract has an operator and some funds):
+
+| Step | Account | Action | Expected |
+|---|---|---|---|
+| 1 | A | Connect, link, deposit 0.001 ETH | +100 NTK after ~1 min, status `credited` |
+| 2 | B | Deposit from Remix without linking | Status `unlinked` (admin view), no tokens |
+| 3 | B | Log in as a second user, link B | The waiting deposit is credited at once |
+| 4 | A | Deposit 0.00001 ETH | MetaMask/Remix rejects: `AmountOutOfRange` |
+| 5 | B | `payout` in Remix | `OnlyOperator` |
+| 6 | A | Set a 1 NTK daily deposit limit, deposit 0.001 ETH | Status `held` with the limit reason |
+| 7 | A | Link A to the second user too | `ADDRESS_TAKEN` |
+| 8 | A | New unverified user (no limits), link A, deposit 0.03 ETH (3,000 NTK) | `held`: over the 2,000 NTK KYC cap; after KYC verification an admin retry credits it |
+| 9 | A | Verified user withdraws 100 NTK | −100 NTK at once; `paid` with an Etherscan link after ~1 min; +0.001 ETH in MetaMask |
+| 10 | owner | `pause()` in Remix, then A withdraws | Stays `queued` with "The cashier contract is paused"; paid after `unpause()` |
+| 11 | A | Unverified user withdraws | `KYC_REQUIRED` |
 
 ## Architecture
 
@@ -41,6 +167,9 @@ flowchart LR
   C <--> P[(PostgreSQL<br/>append-only ledger)]
   C -->|ws fan-out| R
   C -->|post-match report| DL
+  W -.->|on 429 / down| SB[deadlock-bot<br/>Rust, Steam]
+  C -.->|on 429 / down| SB
+  SB -->|Steam game coordinator| V[(Valve)]
   B[Browser<br/>SolidJS] -->|REST + WebSocket| N[nginx] --> C
 ```
 
@@ -66,20 +195,141 @@ flowchart LR
 7. **Watchdogs**: no watcher data for 60 s → STALE and suspended. Stale for 20 min → ended and settled from the
    report.
 
+## Live matches and the realtime map
+
+**All live matches** (lobby, below "Bet live"): every match of the in-game Watch tab (up to 200) with each
+player's hero, Steam name and rank badge, each team's average rank, souls, the match clock, and filters for region,
+mode and player, plus the rank spread. It refreshes every 30 s. Matches you can bet on are marked and open their
+betting page; the others open `/live/{matchId}`.
+
+**Realtime map** (match page and `/live/{matchId}`): the minimap with every hero (portrait, team ring, health bar,
+respawn timer), the lanes and the objectives with their health. Next to it are tabs for **events** (kills,
+purchases, level-ups, objectives destroyed), **stats** (level, K/D/A, souls, health, rank; click a hero for its
+items) and **souls** (the lead over time). It plays about 25 s behind the real game: Valve's broadcast delay (about
+21 s) plus a few seconds of smoothing. You can pause and jump back to live.
+
+Item and objective icons are the game's current art from the [Deadlock Wiki](https://deadlock.wiki), stored as small
+WebP files in `frontend/public/icons/`. Refresh them after a patch with `python frontend/scripts/wiki_icons.py` (needs
+Pillow). Items the wiki has no icon for keep deadlock-api's.
+
+Who may watch: admins and premium players (`POST /api/admin/users/{id}/premium {"premium": true}`) can watch every
+match. Other logged-in players can watch a match once they have at least `LIVE_VIEW_MIN_STAKE_TOKENS` (100) staked on
+it. Set it to 0 to open the map to every logged-in player.
+
+How it works:
+
+```mermaid
+flowchart LR
+  V[(Valve broadcast relay)] -->|HTTP fragments, ~3 s each| B[deadlock-bot<br/>haste parser]
+  B -->|live:frame + naebka:live-frames| R[(Redis)]
+  R --> W[Watcher] -->|state from frames: odds| R
+  R --> C[Core: LiveFrameRelay<br/>+5 s] -->|watch:matchId| UI[Browser map]
+  DL[(deadlock-api)] -->|names, ranks, assets| W -->|live:directory| R
+```
+
+* **Directory** (`live/naebka_live/directory.py`): after each poll the watcher adds Steam names
+  (`/v1/players/steam`) and ranks (`/v1/players/rank`), batched 1000 at a time and cached in Redis (names 24 h,
+  ranks 1 h), so a full list costs a few requests an hour. Hero, rank and item images and the map come from
+  deadlock-api's assets every 6 h. The core serves them at `GET /api/live/directory`, `/api/live/assets` and
+  `/api/live/matches/{id}`.
+* **Feeds** (`deadlock-bot/src/feeds.rs`, `src/live.rs`): the bot follows the broadcasts of the watcher's tracked
+  matches and of any match a viewer has open (up to `DEADLOCK_BOT_MAX_FEEDS`, 12), one parser thread each. Broadcast
+  URLs come from deadlock-api's public list, or from spectating with the bot (one per 5 minutes). Every frame (twice
+  a second) goes to Redis.
+* **Odds from the broadcast**: for tracked matches with a feed, the watcher uses the broadcast state instead of the
+  live list, which is 2–4 minutes old. That includes Valve's own objective bitmasks, so the numbers are on the same
+  scale as the list's. Objectives and souls swings therefore suspend markets within about 2 s of the broadcast
+  showing them, not minutes later.
+* **Courtsiding defence**: the core holds every frame for `LIVE_VIEW_DELAY_SECONDS` (5) before sending it to viewers,
+  so markets are suspended before anyone watching sees the event that suspended them.
+
+## Steam bot fallback
+
+deadlock-api limits each IP. The live match list allows 100 requests/s (and is cached for 120 s), but a match
+result that has to come fresh from Steam, which is the case right after a match ends, allows only **3 requests per
+hour**. Settlement asks for every ended match, so it used to hit "429 Too Many Requests" and stall.
+
+`deadlock-bot/` is the team's own Steam bot. In `serve` mode it stays logged in to Steam and answers
+`GET /v1/matches/active` and `GET /v1/matches/{id}/metadata` with the same JSON as deadlock-api, so the site only
+needs a second address:
+
+* **Settlement** (`live/FallbackReportSource.java`): deadlock-api first. On 429/503 its breaker opens for as long as
+  `Retry-After` says (60 s without one), and the bot is asked instead. "Not processed yet" (404) from the API is
+  final for that attempt, so the bot's smaller budget isn't spent. When both are down, settlement waits for the
+  sooner of the two `Retry-After`s instead of a fixed minute.
+* **Watcher** (`live/naebka_live/deadlock_api.py`): the same order for the live list. The bot can't look up one
+  player's match (`?account_id=`), so while only the bot answers, a match that drops out of the list is called
+  ended after 12 missing polls instead of 3.
+* **Admin dashboard**: shows both breakers and whether the watcher is on `deadlock-api` or `deadlock-bot`.
+
+The bot keeps its own waits so the Steam account doesn't look like a bot hammering Valve: at most one live list and
+one match result per minute and one spectate per 5 minutes, with answers cached. Over that it answers `429` with
+`Retry-After`, like deadlock-api.
+
+Run it (needs a separate Steam account with Deadlock access; see [deadlock-bot/README.md](deadlock-bot/README.md)):
+
+```bash
+docker compose --profile bot up --build -d
+docker compose run --rm deadlock-bot login --username <bot steam login>   # once: password + Steam Guard
+```
+
+The login token is kept in the `botdata` volume. Without the `bot` profile everything works as before: requests to
+the bot fail fast and settlement waits for deadlock-api.
+
+## KYC
+
+Hybrid identity verification (Risk #5, "AML/KYC program absent"): automatic rules decide the clear cases, and
+anything ambiguous goes to a person.
+
+1. The player submits name, document type, number and expiry (`POST /api/kyc/submissions`, page `/verification`).
+   Date of birth and country aren't asked again: they come from the profile given at registration. The player can
+   correct them on the same page (`PUT /api/auth/me`, same 18+ / licensed-country rules). Every change is kept in
+   `profile_changes`. A change is refused while a review is pending, and it ends an existing verification.
+2. `RuleBasedKycProvider` runs the checks. It sits behind the `KycProvider` interface, so a real vendor could be
+   swapped in later (Strategy pattern).
+
+   | Check | If it fails |
+   |---|---|
+   | Age ≥ 18, issuing country licensed, document not expired | **FAIL**: auto-rejected, the player can fix it and resubmit |
+   | Document number check digit (ICAO 9303: weights 7-3-1, mod 10) | **FAIL** |
+   | Date of birth or country changed in the last 30 days | **REVIEW**: goes to the admin KYC queue |
+   | Document already used by another account | **REVIEW** |
+
+3. Any FAIL → `REJECTED`; otherwise any REVIEW → `PENDING` (admin approves or rejects at `/admin`, which is
+   written to `admin_audit_log`); otherwise → `VERIFIED` automatically.
+
+**Tiered limits** until `VERIFIED`: withdrawals return `403 KYC_REQUIRED`, and lifetime deposits (the signup bonus
+doesn't count) are capped at `naebka.kyc.unverified-deposit-cap-tokens` (2,000 NTK).
+
+**Data minimisation:** the document number is never stored. Only the last 4 characters and an HMAC (for
+duplicate detection) are kept. On the form, **Use a test number** generates a number with a valid check digit, so
+the demo never needs a real document.
+
+Licensed countries (`naebka.registration.licensed-countries`): United Kingdom, Malta, Sweden, Denmark, Czech
+Republic, Netherlands, Croatia, Estonia, Italy, Latvia, Switzerland, Romania, Spain, Lithuania, North Macedonia,
+Germany, Hungary, Montenegro, Slovenia, Portugal, Belgium, Ireland, Bulgaria, Greece, Serbia, Slovakia.
+
 ## Tests
 
 ```bash
-# Java: 41 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money)
+# Java: 72 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules,
+# deadlock-api -> Steam bot fallback, Ethereum signatures, deposit-log parsing, payout encoding and signing)
 cd core && mvn test
-# + 14 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
+# + 40 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
 cd core && mvn -Pit test
 
-# Python: 21 tests, mypy --strict
+# Python: 36 tests, mypy --strict
 cd live && python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"   # bin/ on Linux/macOS
 .venv/Scripts/python -m pytest && .venv/Scripts/python -m mypy naebka_live tests
 
 # Frontend (no local Node needed)
 docker run --rm -v "$PWD/frontend:/app" -w /app node:22-alpine sh -c "npm install && npx tsc --noEmit && npx vp lint src && npm run build"
+
+# Steam bot: 27 unit tests (needs Rust and protoc, see deadlock-bot/README.md)
+cd deadlock-bot && cargo test
+
+# Cashier contract: 17 Hardhat tests (no local Node needed)
+docker run --rm -v "$PWD/contracts:/app" -w /app node:22-alpine sh -c "npm ci && npx hardhat test"
 ```
 
 What the integration tests prove (Definition of Done: "end-to-end simulated match flows: place, suspend, reprice,
@@ -90,6 +340,15 @@ settle" via the scripted `MatchSimulator`):
 * Stream/report disagreement → `REVIEW`; void → stakes refunded.
 * 40 concurrent debits on one wallet → exactly 20 succeed, balance never negative, ledger sum = balance.
 * Idempotency keys move money once; the ledger rejects `UPDATE`/`DELETE`.
+* KYC: a clean submission is auto-verified, a bad check digit is auto-rejected and can be resubmitted, a recent
+  profile change or a reused document goes to review, admin decisions are audited, profile edits are blocked during
+  review and end a verification, unverified users can't withdraw and hit the deposit cap.
+* Withdrawals to MetaMask (against a fake chain): signed by the operator, sent one at a time, confirmed after 3 blocks;
+  a reverted payout is refunded once, but not when the contract says it was already paid; a paused contract makes
+  it wait; the same Idempotency-Key never takes tokens twice; KYC, a linked address and the contract's limits are
+  required.
+* Realtime map: only admins, premium players and players with a big enough bet may watch; rosters are stored with
+  the match and shown with names and ranks; the directory links matches that can be bet on.
 * HTTP: RFC 7807 errors, logout revokes the JWT, slot spin is verifiable after seed rotation, poker buy-in/cash-out.
 
 ## Where each design document lives in the code
@@ -102,13 +361,15 @@ settle" via the scripted `MatchSimulator`):
 | RFC 7807 errors, Idempotency-Key, cursor pagination | `common/GlobalExceptionHandler.java`, `common/Cursor.java` |
 | JWT (never in URLs), bcrypt, sessions, lockout (Risk #2) | `auth/*`: the WebSocket authenticates with its first message, not a query string |
 | Suspend-then-reprice, odds_history, plausibility watchdog | `live/MatchService.java`, `live/BetService.java` |
-| Settlement reconciliation + manual review | `live/SettlementService.java`, `live/DeadlockReportClient.java` (circuit breaker), `/admin` |
+| Settlement reconciliation + manual review | `live/SettlementService.java`, `live/FallbackReportSource.java` + `live/DeadlockReportClient.java` (circuit breakers, Steam bot fallback), `/admin` |
 | BettingEngine UML | `live/*`; markets are DB-driven (match winner, duration over/under 30:00) |
 | Slot machine UML (SlotMachine, Reel, Paytable, Payline, ProvablyFairRNG, BonusGame, JackpotPool…) | `slots/*` |
 | Poker UML (PokerTable, Player, Deck, HandEvaluator, PotManager, Pot…) | `poker/*`: one actor thread per table |
 | Hole-card masking, same-IP restriction (LLD §2.1) | `PokerTable.publicState()` / `privateState()`, `PokerService.sit()` |
 | WebSocket `{topic, seq, ts, data}` with `lastSeq` resume | `ws/WsHub.java`, `ws/NaebkaWebSocketHandler.java`, `frontend/src/lib/ws.ts` |
 | Responsible gambling (Risk #4) | `wallet/ResponsibleGamingService.java`: deposit/wager/loss limits, 24 h cooling-off on increases, self-exclusion |
+| KYC: hybrid auto + manual verification, tiered limits (Risk #5) | `kyc/*`, `db/migration/V3__kyc.sql`, `V4__profile_changes.sql`, `frontend/src/pages/Verification.tsx`, KYC queue in `/admin` |
+| MetaMask + Sepolia deposits and withdrawals (course web3 lab) | `contracts/` (contract, Hardhat tests, deploy script), `eth/*`, `db/migration/V5__eth.sql`, `V6__eth_withdrawals.sql`, `frontend/src/lib/eth.ts`, `frontend/src/components/EthWallet.tsx` |
 | CURRENCY_MODE compliance gate (Risk #13) | `config/CurrencyModeGuard.java`: REAL_MONEY refuses to start without the license sign-off file |
 | Frontend stack (Vite+, SolidJS, TS, Tailwind, TanStack, openapi-typescript, component registry) | `frontend/`; API types generated into `src/api/schema.d.ts` (`npm run gen:api`), shared components in `src/components/ui.tsx` |
 
@@ -119,7 +380,7 @@ Where the documents disagreed or left things open, this is what was built and wh
 | Topic | Documents say | Built | Why |
 |---|---|---|---|
 | Odds model | LLD: pari-mutuel; Technical Design: heuristic fixed odds | Heuristic fixed odds with suspend-then-reprice | Matches the architecture and risk docs (courtsiding defense needs fixed prices) |
-| Payments | Architecture: PSP webhooks; DB: Bitcoin; DoD: play money | Play-money deposit/withdraw endpoints; `btc_payments` table exists but is unused | No licence; the DoD milestone is play money |
+| Payments | Architecture: PSP webhooks; DB: Bitcoin; DoD: play money | Play-money deposit/withdraw endpoints, plus Sepolia test-ETH deposits and withdrawals through MetaMask (`eth/*`, `contracts/`); `btc_payments` table exists but is unused | No licence; the DoD milestone is play money, and Sepolia ETH has no value |
 | Login | Steam OpenID + email/password | Username/password + JWT; `/api/auth/steam` returns 501 | Steam needs a public return URL; insider-betting check (`BETTOR_IS_PARTICIPANT`) depends on it |
 | Games | CS2 + Deadlock | Deadlock only; `cs2` row exists, inactive | Only Deadlock has a data source |
 | Watcher fleet | Supervisor + many watchers | One watcher process + core watchdogs (STALE, heartbeat) | MVP scale (≤ 8 matches); same event contract, so it can be split later |
@@ -131,7 +392,8 @@ Where the documents disagreed or left things open, this is what was built and wh
 
 ## Known gaps (not built)
 
-* Real-money rails (PSP, KYC/AML, geo-IP checks, withdrawal review queue) — the compliance gate blocks REAL_MONEY.
+* Real-money rails (PSP, real KYC vendor and document-photo checks, AML transaction monitoring, geo-IP checks,
+  withdrawal review queue) — the compliance gate blocks REAL_MONEY.
 * Steam OpenID, 2FA, insider-betting cross-check.
 * Reality-check reminders, first-withdrawal delay, chargeback / negative-balance policy (Risk #12).
 * Kubernetes deployment, load tests, SonarQube/CI pipeline.
