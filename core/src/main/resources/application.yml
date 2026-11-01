@@ -1,0 +1,79 @@
+server:
+  port: 8081
+  forward-headers-strategy: framework
+
+spring:
+  application.name: naebka-core
+  datasource:
+    url: jdbc:postgresql://localhost:55432/naebka
+    username: naebka
+    password: naebka
+    hikari:
+      maximum-pool-size: 20
+  flyway:
+    enabled: true
+  data:
+    redis:
+      host: localhost
+      port: 56379
+  mvc:
+    problemdetails:
+      enabled: true
+  jackson:
+    default-property-inclusion: non_null
+
+management:
+  endpoints.web.exposure.include: health,info
+
+springdoc:
+  api-docs.path: /api/openapi.json
+  swagger-ui.path: /api/docs
+
+naebka:
+  # PLAY_MONEY | REAL_MONEY. REAL_MONEY requires license-signoff-file to exist (Risk #13).
+  currency-mode: PLAY_MONEY
+  license-signoff-file: /etc/naebka/license-signoff.json
+  # Display rule: winnings are shown in real money at a fixed rate (High-Level Design §1).
+  token-fiat-rate: 0.10
+  fiat-currency: EUR
+  jwt:
+    secret: dev-only-secret-change-me-dev-only-secret-change-me
+    ttl-minutes: 60
+  admin:
+    username: admin
+    password: admin12345
+  registration:
+    min-age: 18
+    licensed-countries: [CZ, SK, DE, AT, PL, GB, IE, NL, EE, LV, LT, FI, SE, DK, MT, CY]
+  auth:
+    max-failed-logins: 5
+    lockout-minutes: 15
+  wallet:
+    max-deposit-tokens: 10000
+    signup-bonus-tokens: 1000
+  betting:
+    min-stake-tokens: 1
+    max-stake-tokens: 5000
+    # Courtsiding defense: bets are re-validated after this delay (Technical Design: suspend-then-reprice).
+    acceptance-delay-ms: 1500
+    bets-per-minute: 30
+    # A match with no watcher event for this long is marked STALE and suspended (Risk #14).
+    stale-after-seconds: 60
+    # Plausibility band: odds outside it keep the market suspended (Risk #11).
+    min-odds: 1.01
+    max-odds: 51.0
+  settlement:
+    poll-seconds: 30
+    # Give up auto-settlement and route to manual review after this long without a report.
+    review-after-minutes: 180
+  poker:
+    turn-timeout-seconds: 30
+    reconnect-grace-seconds: 30
+    rake-percent: 5
+    rake-cap-big-blinds: 3
+    min-buy-in-big-blinds: 20
+    max-buy-in-big-blinds: 100
+    block-same-ip: true
+  deadlock-api:
+    base-url: https://api.deadlock-api.com
+    timeout-seconds: 10

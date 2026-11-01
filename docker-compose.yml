@@ -1,0 +1,78 @@
+# Naebka — local / MVP deployment (System Architecture Design: "Docker Compose behind an Nginx reverse proxy").
+# Start everything:  docker compose up --build
+# Open:              http://localhost:8080
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: naebka
+      POSTGRES_USER: naebka
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-naebka}
+    ports: ["${POSTGRES_HOST_PORT:-55432}:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U naebka -d naebka"]
+      interval: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports: ["${REDIS_HOST_PORT:-56379}:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 20
+
+  # Transactional core: auth, wallet ledger, betting, settlement, slots, poker, WebSocket hub.
+  core:
+    build: ./core
+    restart: unless-stopped
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/naebka
+      SPRING_DATASOURCE_USERNAME: naebka
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-naebka}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      NAEBKA_JWT_SECRET: ${NAEBKA_JWT_SECRET:-dev-only-secret-change-me-dev-only-secret-change-me}
+      NAEBKA_CURRENCY_MODE: ${NAEBKA_CURRENCY_MODE:-PLAY_MONEY}
+      NAEBKA_ADMIN_USERNAME: ${NAEBKA_ADMIN_USERNAME:-admin}
+      NAEBKA_ADMIN_PASSWORD: ${NAEBKA_ADMIN_PASSWORD:-admin12345}
+      NAEBKA_POKER_BLOCK_SAME_IP: ${NAEBKA_POKER_BLOCK_SAME_IP:-false}
+      NAEBKA_DEADLOCK_API_BASE_URL: ${DEADLOCK_API_BASE_URL:-https://api.deadlock-api.com}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    ports: ["8081:8081"]
+
+  # Ingestion: polls the public Deadlock API and publishes normalized match events.
+  watcher:
+    build: ./live
+    restart: unless-stopped
+    command: ["python", "-m", "naebka_live.watcher"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DEADLOCK_API_BASE_URL: ${DEADLOCK_API_BASE_URL:-https://api.deadlock-api.com}
+      WATCHER_MAX_TRACKED: ${WATCHER_MAX_TRACKED:-8}
+      WATCHER_POLL_SECONDS: ${WATCHER_POLL_SECONDS:-10}
+    depends_on:
+      redis: { condition: service_healthy }
+
+  # Heuristic odds engine: consumes match events, publishes odds updates.
+  odds-engine:
+    build: ./live
+    restart: unless-stopped
+    command: ["python", "-m", "naebka_live.odds_engine"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      ODDS_MARGIN: ${ODDS_MARGIN:-0.06}
+    depends_on:
+      redis: { condition: service_healthy }
+
+  # SolidJS SPA served by nginx, which also reverse-proxies /api and /ws to the core.
+  web:
+    build: ./frontend
+    ports: ["8080:80"]
+    depends_on: [core]
+
+volumes:
+  pgdata:
