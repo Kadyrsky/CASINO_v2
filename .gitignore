@@ -1,0 +1,12 @@
+.env
+**/target/
+**/node_modules/
+**/dist/
+**/__pycache__/
+**/.mypy_cache/
+**/.pytest_cache/
+**/.venv/
+.idea/
+.vscode/
+*.iml
+**/*.egg-info/
