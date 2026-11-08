@@ -308,8 +308,19 @@ export interface LiveAssets {
   items: Record<string, { name: string; image: string | null; tier: number | null; slot: string | null }>;
   /** Heroes' own abilities (missing in assets the watcher cached before abilities were added). */
   abilities?: Record<string, { name: string; image: string | null }>;
-  map: { radius: number; image: string | null; lanes: { color: string; points: [number, number][] }[] };
+  map: {
+    radius: number;
+    image: string | null;
+    lanes: { color: string; points: [number, number][] }[];
+    /** Neutral camps by kind ("vault" is a Sinner's Sacrifice); missing in assets cached before camps were added. */
+    camps?: { kind: CampKind; x: number; y: number }[];
+    urn_spawns?: [number, number][];
+    urn_pads?: [number, number][];
+    rift_spots?: [number, number][];
+  };
 }
+
+export type CampKind = 'weak' | 'medium' | 'strong' | 'vault';
 
 export interface WatchAccess {
   allowed: boolean;
@@ -339,10 +350,42 @@ export interface FramePlayer {
   respawn_in_s: number | null;
   ult_ready: boolean;
   items: number[];
+  /** The four abilities in slot order (the ultimate last); missing in frames from older bots. */
+  abilities?: FrameAbility[];
   x: number | null;
   y: number | null;
   hp: number | null;
   max_hp: number | null;
+  /** Unspent souls. */
+  souls?: number | null;
+  last_hits?: number | null;
+  denies?: number | null;
+  hero_damage?: number | null;
+  objective_damage?: number | null;
+}
+
+export interface FrameAbility {
+  id: number;
+  unlocked: boolean;
+  /** Ability points in it, 0 to 3. */
+  tier: number;
+}
+
+/** A neutral camp's timer; the kind comes from the map assets (matched by position). */
+export interface FrameCamp {
+  id: number;
+  x: number;
+  y: number;
+  /** Seconds until it is back; null while it is up. */
+  respawn_in_s: number | null;
+}
+
+/** A Sinner's Sacrifice that still has health. */
+export interface FrameSinner {
+  x: number;
+  y: number;
+  hp: number;
+  max_hp: number;
 }
 
 export type ObjectiveKind = 'guardian' | 'walker' | 'base_guardian' | 'patron' | 'patron_core' | 'midboss';
@@ -366,6 +409,8 @@ export type FrameEvent =
   /** An ability point put into an ability: tier 1 to 3. */
   | { type: 'ability_upgraded'; time_s: number; account_id: number; ability_id: number; tier: number }
   | { type: 'objective_destroyed'; time_s: number; kind: ObjectiveKind; team: 0 | 1 | null; lane: number | null }
+  /** The Mid-Boss fell to `killer` (a hero, when it was one) of `team`. */
+  | { type: 'midboss_killed'; time_s: number; team: 0 | 1 | null; killer?: number | null }
   | { type: 'urn_spawned'; time_s: number }
   | { type: 'urn_picked_up' | 'urn_dropped'; time_s: number; account_id: number }
   | { type: 'urn_delivered'; time_s: number; account_id: number; team: 0 | 1 }
@@ -379,6 +424,8 @@ export interface FrameUrn {
   carrier: number | null;
   /** Where it has to be taken, once someone picked it up. */
   delivery: [number, number] | null;
+  /** Souls it gives the team that delivers it. */
+  value?: number | null;
 }
 
 /** The Unstable Rift: appearing on a side-lane bridge, then open as a capture point. */
@@ -386,9 +433,15 @@ export interface FrameRift {
   x: number;
   y: number;
   open: boolean;
+  /** Seconds until an appearing rift opens. */
+  opens_in_s?: number | null;
   /** Capture progress per team (Hidden King first), 0 to 1. */
   progress: [number, number];
   capturers: [number, number];
+  /** Both teams are on the point, so neither makes progress. */
+  contested?: boolean;
+  /** Hero ids of each team's players on the point. */
+  heroes?: [number[], number[]];
   /** Seconds until an open rift closes uncaptured. */
   closes_in_s: number | null;
 }
@@ -411,6 +464,13 @@ export interface LiveFrame {
   /** Absent in frames from bots older than the urn and rift. */
   urn?: FrameUrn | null;
   rift?: FrameRift | null;
+  /** Absent in frames from bots older than the camps. */
+  camps?: FrameCamp[];
+  /** Seconds until the Mid-Boss is back, while it is dead. */
+  midboss_respawn_in_s?: number | null;
+  sinners?: FrameSinner[];
+  /** Bridge power-ups waiting to be picked up. */
+  powerups?: { x: number; y: number }[];
   events: FrameEvent[];
   received_at: number;
 }

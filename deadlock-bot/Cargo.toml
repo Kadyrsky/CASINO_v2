@@ -36,3 +36,8 @@ valveprotos = { git = "https://github.com/deadlock-api/deadlock-api", rev = "328
 [dev-dependencies]
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
+
+# haste's var-type parser with a fix for the multi-argument templates in current Deadlock broadcasts (see
+# vendor/haste_vartype/Cargo.toml). Without it, every broadcast fails with "unknown char ,".
+[patch."https://github.com/blukai/haste"]
+haste_vartype = { path = "vendor/haste_vartype" }

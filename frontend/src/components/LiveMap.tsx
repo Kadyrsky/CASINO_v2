@@ -7,14 +7,15 @@
  */
 import { A } from '@solidjs/router';
 import { createQuery } from '@tanstack/solid-query';
-import { createMemo, createSignal, For, Index, onCleanup, Show, type JSX } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, Index, onCleanup, Show, useContext, type JSX } from 'solid-js';
 import { get } from '../api/client';
-import type { FrameEvent, FrameObjective, FramePlayer, FrameRift, LiveAssets, LiveFrame, LiveMatchInfo, LivePlayer } from '../api/types';
+import type { FrameEvent, FrameObjective, FramePlayer, FrameRift, FrameSinner, LiveAssets, LiveFrame, LiveMatchInfo, LivePlayer } from '../api/types';
 import { auth } from '../lib/auth';
 import { clock, compact, tokens } from '../lib/format';
 import { RIFT_ICON, TEAM_COLOR, TEAM_NAMES, TEAM_TEXT, URN_ICON, abilityOf, heroOf, itemOf, objectiveIcon, toMap, useLiveAssets } from '../lib/live';
 import { useTopic } from '../lib/ws';
 import { HeroIcon, RankBadge, playerName } from './live';
+import { AbilityRow, CampMarker, MapScale, MidbossTimer, ObjectiveStatus, PowerupMarker, RiftCapturers, campKinds } from './liveMapLayers';
 import { Badge, Button, Card, Spinner, Tabs } from './ui';
 
 const KEEP_FRAMES = 160; // ~80 s at 2 frames per second
@@ -126,8 +127,9 @@ function ObjectiveMarker(props: { o: FrameObjective; at: [number, number] }) {
   const outer = () => s() + 4;
   // Glyphs are a little smaller than the square, so the dark edge frames them; pictures fill it.
   const img = () => (isGlyph(props.o.kind) ? s() * 0.8 : s());
+  const k = useContext(MapScale);
   return (
-    <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000})`}>
+    <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000}) scale(${k()})`}>
       <title>{`${props.o.kind.replace('_', ' ')} · ${Math.round(share() * 100)}%`}</title>
       <rect x={-outer()} y={-outer()} width={outer() * 2} height={outer() * 2} rx={outer() * 0.35} fill="#0b0a10" stroke="rgb(0 0 0 / 0.5)" stroke-width="3" />
       <rect
@@ -173,6 +175,8 @@ function eventIcon(e: FrameEvent): JSX.Element {
       const src = objectiveIcon(e.kind, e.team);
       return src ? framed(src, objectiveColor(e.kind, e.team), isGlyph(e.kind)) : <span>💥</span>;
     }
+    case 'midboss_killed':
+      return framed('/icons/objectives/midboss.webp', e.team == null ? '#b07cff' : TEAM_COLOR[e.team], true);
     case 'rift_appeared':
     case 'rift_opened':
     case 'rift_closed':
@@ -226,21 +230,41 @@ function eventExtra(e: FrameEvent, assets?: LiveAssets): JSX.Element | null {
 }
 
 /**
- * The Unstable Rift: dimmed with a dashed outline while it appears, then open with each team's capture progress as
- * a bar below it (Hidden King on top).
+ * The Unstable Rift: dimmed with a dashed outline and a countdown while it appears, then open with each team's
+ * capture progress as a bar below it (Hidden King on top), a pulsing ring while both teams contest it, and the time
+ * left before it closes.
  */
 function RiftMarker(props: { r: FrameRift; at: [number, number] }) {
+  const k = useContext(MapScale);
   const s = 16;
   const outer = s + 4;
   const title = () => {
-    if (!props.r.open) return 'Unstable Rift · appearing';
+    if (!props.r.open) return `Unstable Rift · opens${props.r.opens_in_s != null ? ` in ${clock(props.r.opens_in_s)}` : ' soon'}`;
     const pct = props.r.progress.map((p) => `${Math.round(p * 100)}%`);
-    const left = props.r.closes_in_s != null ? ` · closes in ${Math.ceil(props.r.closes_in_s)} s` : '';
-    return `Unstable Rift · ${TEAM_NAMES[0]} ${pct[0]}, ${TEAM_NAMES[1]} ${pct[1]}${left}`;
+    const left = props.r.closes_in_s != null ? ` · closes in ${clock(props.r.closes_in_s)}` : '';
+    return `Unstable Rift · ${TEAM_NAMES[0]} ${pct[0]}, ${TEAM_NAMES[1]} ${pct[1]}${props.r.contested ? ' · contested' : ''}${left}`;
   };
+  const label = (text: string, y: number, fill: string) => (
+    <text y={y} text-anchor="middle" fill={fill} class="text-[11px] font-semibold tabular" paint-order="stroke" stroke="#0b0a10" stroke-width="3.5">
+      {text}
+    </text>
+  );
   return (
-    <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000})`} opacity={props.r.open ? 1 : 0.6}>
+    <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000}) scale(${k()})`} opacity={props.r.open ? 1 : 0.8}>
       <title>{title()}</title>
+      <Show when={props.r.open && props.r.contested}>
+        <rect
+          x={-outer - 6}
+          y={-outer - 6}
+          width={outer * 2 + 12}
+          height={outer * 2 + 12}
+          rx={outer * 0.5}
+          fill="none"
+          stroke="var(--color-warn)"
+          stroke-width="2.5"
+          class="animate-pulse-soft"
+        />
+      </Show>
       <rect
         x={-outer}
         y={-outer}
@@ -253,6 +277,7 @@ function RiftMarker(props: { r: FrameRift; at: [number, number] }) {
         stroke-dasharray={props.r.open ? undefined : '6 5'}
       />
       <image href={RIFT_ICON} x={-s * 0.8} y={-s * 0.8} width={s * 1.6} height={s * 1.6} />
+      <Show when={!props.r.open && props.r.opens_in_s != null}>{label(clock(props.r.opens_in_s), -outer - 6, RIFT_COLOR)}</Show>
       <Show when={props.r.open}>
         <For each={[0, 1] as const}>
           {(team) => (
@@ -262,18 +287,20 @@ function RiftMarker(props: { r: FrameRift; at: [number, number] }) {
             </>
           )}
         </For>
+        <Show when={props.r.closes_in_s != null}>{label(clock(props.r.closes_in_s), -outer - 6, 'var(--color-ink-100)')}</Show>
       </Show>
     </g>
   );
 }
 
 /** The Soul Urn lying on the ground. */
-function UrnMarker(props: { at: [number, number] }) {
+function UrnMarker(props: { at: [number, number]; value?: number | null }) {
+  const k = useContext(MapScale);
   const s = 13;
   const outer = s + 4;
   return (
-    <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000})`}>
-      <title>Soul Urn</title>
+    <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000}) scale(${k()})`}>
+      <title>{`Soul Urn${props.value ? ` · ${props.value} souls` : ''}`}</title>
       <rect x={-outer} y={-outer} width={outer * 2} height={outer * 2} rx={outer * 0.35} fill="#0b0a10" stroke={URN_COLOR} stroke-width="3" />
       <image href={URN_ICON} x={-s * 0.85} y={-s * 0.85} width={s * 1.7} height={s * 1.7} />
     </g>
@@ -282,8 +309,9 @@ function UrnMarker(props: { at: [number, number] }) {
 
 /** Where the carried urn has to go: a dashed ring in the carrier's team colour. */
 function UrnDelivery(props: { at: [number, number]; color: string }) {
+  const k = useContext(MapScale);
   return (
-    <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000})`}>
+    <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000}) scale(${k()})`}>
       <title>Soul Urn delivery point</title>
       <circle r="22" fill="rgb(11 10 16 / 0.6)" stroke={props.color} stroke-width="3" stroke-dasharray="7 5" />
       <image href={URN_ICON} x="-12" y="-12" width="24" height="24" opacity="0.6" />
@@ -293,8 +321,9 @@ function UrnDelivery(props: { at: [number, number]; color: string }) {
 
 /** A small urn on the carrier's hero marker (drawn above the heroes, top right of the carrier). */
 function UrnCarried(props: { at: [number, number] }) {
+  const k = useContext(MapScale);
   return (
-    <g transform={`translate(${props.at[0] * 1000 + 15} ${props.at[1] * 1000 - 15})`} class="pointer-events-none">
+    <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000}) scale(${k()}) translate(15 -15)`} class="pointer-events-none">
       <circle r="10" fill="#0b0a10" stroke={URN_COLOR} stroke-width="2.5" />
       <image href={URN_ICON} x="-7.5" y="-7.5" width="15" height="15" />
     </g>
@@ -312,11 +341,12 @@ function HeroMarker(props: {
 }) {
   const hero = () => heroOf(props.assets, props.p.hero_id);
   const hp = () => (props.p.max_hp ? Math.max(0, Math.min(1, (props.p.hp ?? 0) / props.p.max_hp)) : 1);
+  const k = useContext(MapScale);
   return (
     <Show when={props.at}>
       {(at) => (
         <g
-          transform={`translate(${at()[0] * 1000} ${at()[1] * 1000})`}
+          transform={`translate(${at()[0] * 1000} ${at()[1] * 1000}) scale(${k()})`}
           class="cursor-pointer"
           opacity={props.p.alive ? 1 : 0.45}
           onClick={(e) => {
@@ -333,6 +363,11 @@ function HeroMarker(props: {
             {(src) => (
               <image href={src()} x="-14" y="-14" width="28" height="28" clip-path="url(#hero-clip)" filter={props.p.alive ? undefined : 'url(#grey)'} />
             )}
+          </Show>
+          <Show when={props.p.alive && props.p.ult_ready}>
+            <circle cx="13" cy="-13" r="4.5" fill="var(--color-gold-400)" stroke="#0b0a10" stroke-width="2">
+              <title>Ultimate ready</title>
+            </circle>
           </Show>
           <Show when={props.p.alive} fallback={<text y="5" text-anchor="middle" class="fill-ink-100 text-[15px] font-bold">{Math.ceil(props.p.respawn_in_s ?? 0) || '✝'}</text>}>
             <rect x="-17" y="20" width="34" height="5" rx="2" fill="rgb(0 0 0 / 0.7)" />
@@ -363,6 +398,9 @@ function describe(e: FrameEvent, name: (id: number | null | undefined) => string
       return `${name(e.account_id)} put a point into ${ability(e.ability_id)} (${e.tier} of 3)`;
     case 'objective_destroyed':
       return `${e.team != null ? TEAM_NAMES[e.team] : 'A'} ${e.kind.replace('_', ' ')} fell`;
+    case 'midboss_killed':
+      if (e.killer != null) return `${name(e.killer)} killed the Mid-Boss`;
+      return e.team == null ? 'The Mid-Boss was killed' : `${TEAM_NAMES[e.team]} killed the Mid-Boss`;
     case 'urn_spawned':
       return 'The Soul Urn appeared';
     case 'urn_picked_up':
@@ -423,6 +461,15 @@ function eventText(e: FrameEvent, tag: (id: number) => JSX.Element): JSX.Element
           {` ${e.kind.replace('_', ' ')} fell`}
         </span>
       );
+    case 'midboss_killed':
+      if (e.killer != null) return <>{tag(e.killer)}{words('killed the Mid-Boss')}</>;
+      return e.team == null ? (
+        <span class="truncate">The Mid-Boss was killed</span>
+      ) : (
+        <span class="truncate">
+          <span class={`font-medium ${TEAM_TEXT[e.team]}`}>{TEAM_NAMES[e.team]}</span> killed the Mid-Boss
+        </span>
+      );
     case 'urn_spawned':
       return <span class="truncate">The Soul Urn appeared</span>;
     case 'urn_picked_up':
@@ -470,6 +517,100 @@ function Locked(props: { info?: LiveMatchInfo }) {
   );
 }
 
+/** Event list filters. */
+const EVENT_GROUPS = {
+  all: 'All',
+  fights: 'Fights',
+  objectives: 'Objectives',
+  abilities: 'Abilities',
+  items: 'Items',
+} as const;
+type EventGroup = keyof typeof EVENT_GROUPS;
+
+function eventGroup(e: FrameEvent): Exclude<EventGroup, 'all'> {
+  switch (e.type) {
+    case 'kill':
+      return 'fights';
+    case 'purchase':
+      return 'items';
+    case 'level_up':
+    case 'ability_unlocked':
+    case 'ability_upgraded':
+      return 'abilities';
+    default:
+      return 'objectives';
+  }
+}
+
+const MIN_VIEW = 200; // most zoomed in: a fifth of the map across
+
+/**
+ * Zoom (wheel, buttons) and pan (drag) for the map's SVG, as its viewBox. A drag doesn't count as a click, so it
+ * doesn't select or deselect heroes.
+ */
+function usePanZoom() {
+  const [box, setBox] = createSignal({ x: 0, y: 0, w: 1000 });
+  let svg: SVGSVGElement | undefined;
+  let drag: { px: number; py: number; x: number; y: number; moved: boolean } | null = null;
+  let suppressClick = false;
+
+  const clamp = (b: { x: number; y: number; w: number }) => {
+    const w = Math.max(MIN_VIEW, Math.min(1000, b.w));
+    return { w, x: Math.max(0, Math.min(1000 - w, b.x)), y: Math.max(0, Math.min(1000 - w, b.y)) };
+  };
+  /** Zoom by `factor` (< 1 zooms in) keeping the map point under (fx, fy) (0–1 of the view) in place. */
+  const zoom = (factor: number, fx = 0.5, fy = 0.5) => {
+    const b = box();
+    const w = Math.max(MIN_VIEW, Math.min(1000, b.w * factor));
+    setBox(clamp({ w, x: b.x + fx * b.w - fx * w, y: b.y + fy * b.w - fy * w }));
+  };
+  const centerOn = (x: number, y: number) => {
+    const b = box();
+    setBox(clamp({ w: b.w, x: x - b.w / 2, y: y - b.w / 2 }));
+  };
+  const reset = () => setBox({ x: 0, y: 0, w: 1000 });
+
+  const bind = (el: SVGSVGElement) => {
+    svg = el;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      zoom(e.deltaY < 0 ? 0.8 : 1.25, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    onCleanup(() => el.removeEventListener('wheel', onWheel));
+  };
+  const onPointerDown = (e: PointerEvent) => {
+    if (e.button !== 0) return;
+    const b = box();
+    drag = { px: e.clientX, py: e.clientY, x: b.x, y: b.y, moved: false };
+  };
+  const onPointerMove = (e: PointerEvent) => {
+    if (!drag || !svg) return;
+    const r = svg.getBoundingClientRect();
+    const dx = e.clientX - drag.px;
+    const dy = e.clientY - drag.py;
+    if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+    if (!drag.moved) svg.setPointerCapture(e.pointerId);
+    drag.moved = true;
+    const w = box().w;
+    setBox(clamp({ w, x: drag.x - (dx / r.width) * w, y: drag.y - (dy / r.height) * w }));
+  };
+  const onPointerUp = (e: PointerEvent) => {
+    if (drag?.moved) {
+      suppressClick = true;
+      setTimeout(() => (suppressClick = false), 0);
+      svg?.releasePointerCapture(e.pointerId);
+    }
+    drag = null;
+  };
+  /** Wraps a click handler so the click that ends a drag is ignored. */
+  const click = (f: () => void) => () => {
+    if (!suppressClick) f();
+  };
+  return { box, zoom, reset, centerOn, bind, onPointerDown, onPointerMove, onPointerUp, click, zoomed: () => box().w < 999 };
+}
+
 export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
   const assets = useLiveAssets();
   const access = createQuery(() => ({
@@ -481,9 +622,12 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
   const allowed = () => !!access.data?.watch.allowed;
   const [denied, setDenied] = createSignal(false);
   const play = usePlayback();
+  const view = usePanZoom();
   const [selected, setSelected] = createSignal<number | null>(null);
-  const [tab, setTab] = createSignal<'events' | 'stats' | 'souls'>('events');
-  const [layers, setLayers] = createSignal({ lanes: true, objectives: true, names: false });
+  const [follow, setFollow] = createSignal(false);
+  const [tab, setTab] = createSignal<'events' | 'stats' | 'builds' | 'souls'>('events');
+  const [filter, setFilter] = createSignal<EventGroup>('all');
+  const [layers, setLayers] = createSignal({ lanes: true, objectives: true, camps: true, names: false });
 
   useTopic(
     () => (allowed() && !denied() ? `watch:${props.externalId}` : null),
@@ -505,14 +649,14 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
   };
   const radius = () => assets.data?.map.radius ?? 10752;
   const at = (x: number, y: number) => toMap(x, y, radius(), play.view()?.frame.minimap);
-  const players = () => play.view()?.frame.players ?? [];
+  const frame = () => play.view()?.frame;
+  const players = () => frame()?.players ?? [];
   const selectedPlayer = () => players().find((p) => p.account_id === selected());
   const abilityName = (id: number) => abilityOf(assets.data, id)?.name ?? 'an ability';
   // The carried urn follows its carrier's (interpolated) marker.
-  const urnCarrier = () => play.view()?.frame.urn?.carrier ?? null;
+  const urnCarrier = () => frame()?.urn?.carrier ?? null;
   const urnCarrierTeam = () => players().find((p) => p.account_id === urnCarrier())?.team ?? null;
-  const urnCarrierAt = (): [number, number] | null => {
-    const id = urnCarrier();
+  const heroAt = (id: number | null): [number, number] | null => {
     const xy = id == null ? undefined : play.view()?.pos.get(id);
     return xy ? at(xy[0], xy[1]) : null;
   };
@@ -522,6 +666,35 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
     const listed = names().get(id);
     return { name: name(id), heroId: live?.hero_id ?? listed?.hero_id, team: live?.team ?? listed?.team };
   };
+  const tag = (id: number) => <PlayerTag who={who(id)} assets={assets.data} />;
+
+  // Camps: kinds from the map assets, and the Sinner's Sacrifice standing at each vault.
+  const kindOf = createMemo(() => campKinds(assets.data));
+  const sinnerAt = (x: number, y: number): FrameSinner | undefined =>
+    frame()?.sinners?.find((s) => (s.x - x) ** 2 + (s.y - y) ** 2 < 600 * 600);
+  const campCounts = () => {
+    const camps = frame()?.camps ?? [];
+    const kind = kindOf();
+    const up = (c: (typeof camps)[number]) => c.respawn_in_s == null || c.respawn_in_s <= 0;
+    const sinners = camps.filter((c) => kind(c) === 'vault');
+    return { up: camps.filter(up).length, total: camps.length, sinnersUp: sinners.filter(up).length, sinners: sinners.length };
+  };
+  const midboss = () => frame()?.objectives.find((o) => o.kind === 'midboss');
+
+  // Follow the selected hero while zoomed in.
+  const followed = () => (follow() && view.zoomed() ? heroAt(selected()) : null);
+  createEffect(() => {
+    const xy = followed();
+    if (xy) view.centerOn(xy[0] * 1000, xy[1] * 1000);
+  });
+  const scale = () => Math.max(0.45, Math.sqrt(view.box().w / 1000));
+  const events = () => (filter() === 'all' ? play.events() : play.events().filter((e) => eventGroup(e) === filter()));
+  const toggle = (key: keyof ReturnType<typeof layers>, label: string) => (
+    <label class="flex cursor-pointer items-center gap-1.5 text-xs text-ink-300">
+      <input type="checkbox" class="accent-gold-500" checked={layers()[key]} onChange={(e) => setLayers({ ...layers(), [key]: e.currentTarget.checked })} />
+      {label}
+    </label>
+  );
 
   return (
     <Card
@@ -541,62 +714,84 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
     >
       <Show when={!access.isLoading} fallback={<div class="grid place-items-center py-16"><Spinner /></div>}>
         <Show when={allowed() && !denied()} fallback={<Locked info={access.data} />}>
-          <div class="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-            <div class="flex flex-col gap-3">
+          {/* Side by side only when the card itself is wide (on the betting page it shares the row with the bet slip). */}
+          <div class="@container">
+          <div class="grid gap-4 p-4 @5xl:grid-cols-[minmax(0,1fr)_360px]">
+            <div class="flex min-w-0 flex-col gap-3">
               <div class="relative aspect-square w-full overflow-hidden rounded-xl border border-ink-700 bg-ink-950">
-                <svg viewBox="0 0 1000 1000" class="size-full" role="img" aria-label="Live map" onClick={() => setSelected(null)}>
-                  <defs>
-                    <clipPath id="hero-clip"><circle r="14" /></clipPath>
-                    <clipPath id="rounded" clipPathUnits="objectBoundingBox"><rect width="1" height="1" rx="0.25" /></clipPath>
-                    <filter id="grey"><feColorMatrix type="saturate" values="0" /></filter>
-                  </defs>
-                  <Show when={assets.data?.map.image}>
-                    {(src) => <image href={src()} x="0" y="0" width="1000" height="1000" preserveAspectRatio="none" opacity="0.55" />}
-                  </Show>
-                  <Show when={layers().lanes}>
-                    <For each={assets.data?.map.lanes ?? []}>
-                      {(lane) => (
-                        <polyline
-                          points={lane.points.map(([x, y]) => at(x, y).map((v) => (v * 1000).toFixed(1)).join(',')).join(' ')}
-                          fill="none"
-                          stroke={lane.color}
-                          stroke-width="5"
-                          stroke-linecap="round"
-                          opacity="0.35"
+                <MapScale.Provider value={scale}>
+                  <svg
+                    ref={view.bind}
+                    viewBox={`${view.box().x} ${view.box().y} ${view.box().w} ${view.box().w}`}
+                    class={`size-full touch-none select-none ${view.zoomed() ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                    role="img"
+                    aria-label="Live map"
+                    onClick={view.click(() => setSelected(null))}
+                    onPointerDown={view.onPointerDown}
+                    onPointerMove={view.onPointerMove}
+                    onPointerUp={view.onPointerUp}
+                    onPointerCancel={view.onPointerUp}
+                    onDblClick={() => view.reset()}
+                  >
+                    <defs>
+                      <clipPath id="hero-clip"><circle r="14" /></clipPath>
+                      <clipPath id="rounded" clipPathUnits="objectBoundingBox"><rect width="1" height="1" rx="0.25" /></clipPath>
+                      <filter id="grey"><feColorMatrix type="saturate" values="0" /></filter>
+                    </defs>
+                    <Show when={assets.data?.map.image}>
+                      {(src) => <image href={src()} x="0" y="0" width="1000" height="1000" preserveAspectRatio="none" opacity="0.55" />}
+                    </Show>
+                    <Show when={layers().lanes}>
+                      <For each={assets.data?.map.lanes ?? []}>
+                        {(lane) => (
+                          <polyline
+                            points={lane.points.map(([x, y]) => at(x, y).map((v) => (v * 1000).toFixed(1)).join(',')).join(' ')}
+                            fill="none"
+                            stroke={lane.color}
+                            stroke-width={5 * scale()}
+                            stroke-linecap="round"
+                            opacity="0.35"
+                          />
+                        )}
+                      </For>
+                    </Show>
+                    <Show when={layers().camps}>
+                      <Index each={frame()?.camps ?? []}>
+                        {(c) => <CampMarker camp={c()} kind={kindOf()(c())} sinner={sinnerAt(c().x, c().y)} at={at(c().x, c().y)} />}
+                      </Index>
+                    </Show>
+                    <Show when={layers().objectives}>
+                      <Index each={frame()?.objectives ?? []}>
+                        {(o) => <ObjectiveMarker o={o()} at={at(o().x, o().y)} />}
+                      </Index>
+                      <Show when={!midboss() && frame()?.midboss_respawn_in_s}>
+                        {(left) => <MidbossTimer left={left()} at={at(0, 0)} />}
+                      </Show>
+                      <Index each={frame()?.powerups ?? []}>{(p) => <PowerupMarker at={at(p().x, p().y)} />}</Index>
+                      <Show when={frame()?.rift}>{(r) => <RiftMarker r={r()} at={at(r().x, r().y)} />}</Show>
+                      <Show when={frame()?.urn?.delivery}>
+                        {(d) => <UrnDelivery at={at(d()[0], d()[1])} color={urnCarrierTeam() == null ? URN_COLOR : TEAM_COLOR[urnCarrierTeam()!]} />}
+                      </Show>
+                      <Show when={frame()?.urn?.carrier == null && frame()?.urn}>
+                        {(u) => <UrnMarker at={at(u().x, u().y)} value={u().value} />}
+                      </Show>
+                    </Show>
+                    <Index each={players()}>
+                      {(p) => (
+                        <HeroMarker
+                          p={p()}
+                          at={heroAt(p().account_id) ?? undefined}
+                          assets={assets.data}
+                          selected={selected() === p().account_id}
+                          label={name(p().account_id)}
+                          showName={layers().names}
+                          onSelect={view.click(() => setSelected(p().account_id))}
                         />
                       )}
-                    </For>
-                  </Show>
-                  <Show when={layers().objectives}>
-                    <Index each={play.view()?.frame.objectives ?? []}>
-                      {(o) => <ObjectiveMarker o={o()} at={at(o().x, o().y)} />}
                     </Index>
-                    <Show when={play.view()?.frame.rift}>{(r) => <RiftMarker r={r()} at={at(r().x, r().y)} />}</Show>
-                    <Show when={play.view()?.frame.urn?.delivery}>
-                      {(d) => <UrnDelivery at={at(d()[0], d()[1])} color={urnCarrierTeam() == null ? URN_COLOR : TEAM_COLOR[urnCarrierTeam()!]} />}
-                    </Show>
-                    <Show when={play.view()?.frame.urn?.carrier == null && play.view()?.frame.urn}>
-                      {(u) => <UrnMarker at={at(u().x, u().y)} />}
-                    </Show>
-                  </Show>
-                  <Index each={players()}>
-                    {(p) => (
-                      <HeroMarker
-                        p={p()}
-                        at={(() => {
-                          const xy = play.view()?.pos.get(p().account_id);
-                          return xy ? at(xy[0], xy[1]) : undefined;
-                        })()}
-                        assets={assets.data}
-                        selected={selected() === p().account_id}
-                        label={name(p().account_id)}
-                        showName={layers().names}
-                        onSelect={() => setSelected(p().account_id)}
-                      />
-                    )}
-                  </Index>
-                  <Show when={layers().objectives && urnCarrierAt()}>{(xy) => <UrnCarried at={xy()} />}</Show>
-                </svg>
+                    <Show when={layers().objectives && heroAt(urnCarrier())}>{(xy) => <UrnCarried at={xy()} />}</Show>
+                  </svg>
+                </MapScale.Provider>
                 <Show when={!play.view()}>
                   <div class="absolute inset-0 grid place-items-center bg-ink-950/70 text-center">
                     <div class="flex flex-col items-center gap-2 px-6">
@@ -622,6 +817,13 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
                     </div>
                   )}
                 </Show>
+                <div class="absolute bottom-3 right-3 flex flex-col overflow-hidden rounded-lg bg-ink-950/85 ring-1 ring-ink-700">
+                  <button class="px-2.5 py-1 text-sm text-ink-200 hover:bg-ink-800" title="Zoom in (or scroll)" onClick={() => view.zoom(0.7)}>+</button>
+                  <button class="px-2.5 py-1 text-sm text-ink-200 hover:bg-ink-800" title="Zoom out" onClick={() => view.zoom(1 / 0.7)}>−</button>
+                  <Show when={view.zoomed()}>
+                    <button class="px-2.5 py-1 text-xs text-ink-300 hover:bg-ink-800" title="Whole map (or double-click)" onClick={() => view.reset()}>⤢</button>
+                  </Show>
+                </div>
               </div>
 
               <div class="flex flex-wrap items-center gap-2">
@@ -630,34 +832,61 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
                 </Button>
                 <Button size="sm" variant="ghost" onClick={play.jumpToLive} disabled={!play.view()}>⏭ Live</Button>
                 <span class="mx-1 h-5 w-px bg-ink-700" />
-                <For each={[['lanes', 'Lanes'], ['objectives', 'Objectives'], ['names', 'Names']] as const}>
-                  {([key, label]) => (
-                    <label class="flex cursor-pointer items-center gap-1.5 text-xs text-ink-300">
-                      <input
-                        type="checkbox"
-                        class="accent-gold-500"
-                        checked={layers()[key]}
-                        onChange={(e) => setLayers({ ...layers(), [key]: e.currentTarget.checked })}
-                      />
-                      {label}
-                    </label>
-                  )}
-                </For>
+                {toggle('lanes', 'Lanes')}
+                {toggle('objectives', 'Objectives')}
+                {toggle('camps', 'Camps')}
+                {toggle('names', 'Names')}
+                <Show when={selected() != null}>
+                  <label class="flex cursor-pointer items-center gap-1.5 text-xs text-ink-300" title="Keep the selected hero in the middle while zoomed in">
+                    <input
+                      type="checkbox"
+                      class="accent-gold-500"
+                      checked={follow()}
+                      onChange={(e) => {
+                        setFollow(e.currentTarget.checked);
+                        if (e.currentTarget.checked && !view.zoomed()) view.zoom(0.45);
+                      }}
+                    />
+                    Follow
+                  </label>
+                </Show>
               </div>
 
               <Show when={selectedPlayer()}>
                 {(p) => (
-                  <div class="flex flex-wrap items-center gap-3 rounded-xl border border-ink-700 bg-ink-850 p-3">
-                    <HeroIcon assets={assets.data} heroId={p().hero_id} class="size-10" />
-                    <div class="min-w-0">
-                      <p class={`truncate font-semibold ${TEAM_TEXT[p().team]}`}>{name(p().account_id)}</p>
-                      <p class="tabular text-xs text-ink-400">
-                        {heroOf(assets.data, p().hero_id)?.name} · level {p().level} · {p().kills}/{p().deaths}/{p().assists} · {compact(p().net_worth)} souls
-                        {p().ult_ready ? ' · ult ready' : ''}
-                      </p>
+                  <div class="flex flex-col gap-3 rounded-xl border border-ink-700 bg-ink-850 p-3">
+                    <div class="flex flex-wrap items-center gap-3">
+                      <HeroIcon assets={assets.data} heroId={p().hero_id} class="size-10" />
+                      <div class="min-w-0 flex-1">
+                        <p class={`truncate font-semibold ${TEAM_TEXT[p().team]}`}>{name(p().account_id)}</p>
+                        <p class="tabular text-xs text-ink-400">
+                          {heroOf(assets.data, p().hero_id)?.name} · level {p().level} · {p().kills}/{p().deaths}/{p().assists}
+                          {p().ult_ready ? ' · ult ready' : ''}
+                        </p>
+                      </div>
+                      <AbilityRow abilities={p().abilities} assets={assets.data} size="md" />
+                    </div>
+                    <div class="grid grid-cols-3 gap-2 text-center sm:grid-cols-6">
+                      <For
+                        each={[
+                          ['Souls', compact(p().net_worth)],
+                          ['Unspent', p().souls != null ? compact(p().souls) : '–'],
+                          ['Last hits', p().last_hits ?? '–'],
+                          ['Denies', p().denies ?? '–'],
+                          ['Hero dmg', p().hero_damage != null ? compact(p().hero_damage) : '–'],
+                          ['Obj. dmg', p().objective_damage != null ? compact(p().objective_damage) : '–'],
+                        ] as const}
+                      >
+                        {([label, value]) => (
+                          <div class="rounded-lg bg-ink-900 px-2 py-1">
+                            <p class="text-[10px] uppercase tracking-wider text-ink-500">{label}</p>
+                            <p class="tabular text-sm font-semibold text-ink-100">{value}</p>
+                          </div>
+                        )}
+                      </For>
                     </div>
                     <div class="flex flex-wrap gap-1">
-                      <For each={p().items}>
+                      <For each={p().items} fallback={<span class="text-xs text-ink-500">No items yet</span>}>
                         {(id) => (
                           <Show when={itemOf(assets.data, id)}>
                             {(it) => <img src={it().image ?? ''} alt={it().name} title={it().name} class="size-7 rounded bg-ink-800" loading="lazy" />}
@@ -671,24 +900,56 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
             </div>
 
             <div class="flex min-w-0 flex-col gap-3">
+              <Show when={frame()}>
+                {(f) => (
+                  <>
+                    <ObjectiveStatus
+                      urn={f().urn}
+                      rift={f().rift}
+                      midbossAlive={!!midboss()}
+                      midbossHp={midboss() ? midboss()!.hp / Math.max(1, midboss()!.max_hp) : null}
+                      midbossRespawn={f().midboss_respawn_in_s ?? null}
+                      camps={campCounts()}
+                      powerups={f().powerups?.length ?? 0}
+                      carrier={tag}
+                      carrierTeam={urnCarrierTeam()}
+                      assets={assets.data}
+                    />
+                    <Show when={f().rift}>{(r) => <RiftCapturers rift={r()} assets={assets.data} />}</Show>
+                  </>
+                )}
+              </Show>
               <Tabs
                 value={tab()}
                 onChange={setTab}
                 options={[
                   { value: 'events', label: 'Events' },
                   { value: 'stats', label: 'Stats' },
+                  { value: 'builds', label: 'Builds' },
                   { value: 'souls', label: 'Souls' },
                 ]}
               />
               <Show when={tab() === 'events'}>
-                <ol class="flex max-h-[560px] flex-col gap-1 overflow-y-auto pr-1">
-                  <For each={play.events()} fallback={<li class="py-8 text-center text-xs text-ink-500">Kills, purchases, abilities, objectives, the urn and the rift show up here.</li>}>
+                <div class="flex flex-wrap gap-1">
+                  <For each={Object.entries(EVENT_GROUPS) as [EventGroup, string][]}>
+                    {([key, label]) => (
+                      <button
+                        class={`rounded-full px-2.5 py-0.5 text-[11px] font-medium ring-1 transition-colors ${filter() === key ? 'bg-gold-500/15 text-gold-300 ring-gold-500/40' : 'text-ink-400 ring-ink-700 hover:text-ink-200'}`}
+                        onClick={() => setFilter(key)}
+                      >
+                        {label}
+                      </button>
+                    )}
+                  </For>
+                </div>
+                <ol class="flex max-h-[520px] flex-col gap-1 overflow-y-auto pr-1">
+                  <For each={events()} fallback={<li class="py-8 text-center text-xs text-ink-500">Kills, purchases, abilities, objectives, the urn and the rift show up here.</li>}>
                     {(e) => (
                       <li class="flex items-center gap-2 rounded-lg bg-ink-850 px-2.5 py-1.5 text-xs">
                         <span class="tabular w-10 shrink-0 font-mono text-ink-500">{clock(e.time_s)}</span>
                         <span class="grid w-5 shrink-0 place-items-center">{eventIcon(e)}</span>
                         <span class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden text-ink-200" title={describe(e, heroName, abilityName)}>
-                          {eventText(e, (id) => <PlayerTag who={who(id)} assets={assets.data} />)}
+                          {eventText(e, tag)}
                         </span>
                         {eventExtra(e, assets.data)}
                       </li>
@@ -703,28 +964,68 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
                       <div>
                         <p class={`mb-1 text-xs font-bold uppercase tracking-wider ${TEAM_TEXT[team]}`}>{TEAM_NAMES[team]}</p>
                         <ul class="flex flex-col gap-1">
-                          <For each={players().filter((p) => p.team === team)}>
+                          <Index each={players().filter((p) => p.team === team)}>
                             {(p) => (
                               <li
-                                class={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-xs ${selected() === p.account_id ? 'bg-gold-500/10 ring-1 ring-gold-500/40' : 'bg-ink-850 hover:bg-ink-800'}`}
-                                onClick={() => setSelected(p.account_id)}
+                                class={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-xs ${selected() === p().account_id ? 'bg-gold-500/10 ring-1 ring-gold-500/40' : 'bg-ink-850 hover:bg-ink-800'}`}
+                                onClick={() => setSelected(p().account_id)}
+                                title={`Last hits ${p().last_hits ?? '–'} · denies ${p().denies ?? '–'} · hero damage ${p().hero_damage ?? '–'}`}
                               >
-                                <HeroIcon assets={assets.data} heroId={p.hero_id} class="size-7" dim={!p.alive} />
+                                <HeroIcon assets={assets.data} heroId={p().hero_id} class="size-7" dim={!p().alive} />
                                 <div class="min-w-0 flex-1">
                                   <div class="flex items-center gap-1">
-                                    <span class="truncate text-ink-100">{name(p.account_id)}</span>
-                                    <RankBadge assets={assets.data} badge={names().get(p.account_id)?.badge} />
+                                    <span class="truncate text-ink-100">{name(p().account_id)}</span>
+                                    <RankBadge assets={assets.data} badge={names().get(p().account_id)?.badge} />
                                   </div>
                                   <div class="mt-0.5 h-1 overflow-hidden rounded bg-ink-700">
-                                    <div class="h-full bg-win" style={{ width: `${p.max_hp ? Math.round(((p.hp ?? 0) / p.max_hp) * 100) : 0}%` }} />
+                                    <div class="h-full bg-win" style={{ width: `${p().max_hp ? Math.round(((p().hp ?? 0) / (p().max_hp ?? 1)) * 100) : 0}%` }} />
                                   </div>
                                 </div>
-                                <span class="tabular w-8 text-right text-ink-400">Lv{p.level}</span>
-                                <span class="tabular w-14 text-right text-ink-200">{p.kills}/{p.deaths}/{p.assists}</span>
-                                <span class="tabular w-10 text-right text-gold-300">{compact(p.net_worth)}</span>
+                                <span class="tabular w-8 text-right text-ink-400">Lv{p().level}</span>
+                                <span class="tabular w-14 text-right text-ink-200">{p().kills}/{p().deaths}/{p().assists}</span>
+                                <span class="tabular w-10 text-right text-gold-300">{compact(p().net_worth)}</span>
                               </li>
                             )}
-                          </For>
+                          </Index>
+                        </ul>
+                      </div>
+                    )}
+                  </For>
+                </div>
+              </Show>
+              <Show when={tab() === 'builds'}>
+                <div class="flex max-h-[600px] flex-col gap-3 overflow-y-auto pr-1">
+                  <For each={[0, 1] as const}>
+                    {(team) => (
+                      <div>
+                        <p class={`mb-1 text-xs font-bold uppercase tracking-wider ${TEAM_TEXT[team]}`}>{TEAM_NAMES[team]}</p>
+                        <ul class="flex flex-col gap-1">
+                          <Index each={players().filter((p) => p.team === team)}>
+                            {(p) => (
+                              <li
+                                class={`flex cursor-pointer flex-col gap-1.5 rounded-lg px-2 py-1.5 text-xs ${selected() === p().account_id ? 'bg-gold-500/10 ring-1 ring-gold-500/40' : 'bg-ink-850 hover:bg-ink-800'}`}
+                                onClick={() => setSelected(p().account_id)}
+                              >
+                                <div class="flex items-center gap-2">
+                                  <HeroIcon assets={assets.data} heroId={p().hero_id} class="size-7" dim={!p().alive} />
+                                  <div class="min-w-0 flex-1">
+                                    <p class="truncate text-ink-100">{name(p().account_id)}</p>
+                                    <p class="tabular text-[11px] text-ink-400">Lv{p().level} · {p().items.length} items</p>
+                                  </div>
+                                  <AbilityRow abilities={p().abilities} assets={assets.data} />
+                                </div>
+                                <div class="flex flex-wrap gap-0.5">
+                                  <For each={p().items}>
+                                    {(id) => (
+                                      <Show when={itemOf(assets.data, id)}>
+                                        {(it) => <img src={it().image ?? ''} alt={it().name} title={it().name} class="size-5 rounded bg-ink-800" loading="lazy" />}
+                                      </Show>
+                                    )}
+                                  </For>
+                                </div>
+                              </li>
+                            )}
+                          </Index>
                         </ul>
                       </div>
                     )}
@@ -735,6 +1036,7 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
                 <SoulsChart history={play.history()} />
               </Show>
             </div>
+          </div>
           </div>
         </Show>
       </Show>

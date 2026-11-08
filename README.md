@@ -203,10 +203,21 @@ mode and player, plus the rank spread. It refreshes every 30 s. Matches you can 
 betting page; the others open `/live/{matchId}`.
 
 **Realtime map** (match page and `/live/{matchId}`): the minimap with every hero (portrait, team ring, health bar,
-respawn timer), the lanes and the objectives with their health. Next to it are tabs for **events** (kills,
-purchases, level-ups, objectives destroyed), **stats** (level, K/D/A, souls, health, rank; click a hero for its
-items) and **souls** (the lead over time). It plays about 25 s behind the real game: Valve's broadcast delay (about
-21 s) plus a few seconds of smoothing. You can pause and jump back to live.
+respawn timer, a gold dot when the ultimate is ready), the lanes, the objectives with their health, and:
+
+* the **Soul Urn** on the ground or on its carrier, with the pad it has to reach and its value in souls;
+* the **Unstable Rift**: a countdown while it appears, then each team's capture progress, a pulsing ring while both
+  teams contest it, the heroes on the point and the time before it closes;
+* the **neutral camps** with the game's own respawn timers (small, medium and hard camps, and the Sinner's
+  Sacrifices with their health while someone hits them), the **Mid-Boss** respawn and the **bridge power-ups**.
+
+Scroll or use +/− to zoom, drag to pan, double-click for the whole map; "Follow" keeps the selected hero in view. A
+panel above the tabs sums up the urn, the rift, the Mid-Boss and the camps. The tabs: **events** (kills, purchases,
+level-ups, abilities unlocked and upgraded, objectives, Mid-Boss, urn and rift; filter by kind), **stats** (level,
+K/D/A, souls, health, rank), **builds** (each hero's four abilities with their points, and items) and **souls** (the
+lead over time). Click a hero for a card with its abilities, unspent souls, last hits, denies, damage and items. It
+plays about 25 s behind the real game: Valve's broadcast delay (about 21 s) plus a few seconds of smoothing. You can
+pause and jump back to live.
 
 Item and objective icons are the game's current art from the [Deadlock Wiki](https://deadlock.wiki), stored as small
 WebP files in `frontend/public/icons/`. Refresh them after a patch with `python frontend/scripts/wiki_icons.py` (needs
@@ -325,7 +336,7 @@ cd live && python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"   # bin
 # Frontend (no local Node needed)
 docker run --rm -v "$PWD/frontend:/app" -w /app node:22-alpine sh -c "npm install && npx tsc --noEmit && npx vp lint src && npm run build"
 
-# Steam bot: 27 unit tests (needs Rust and protoc, see deadlock-bot/README.md)
+# Steam bot: 35 unit tests (needs Rust and protoc, see deadlock-bot/README.md)
 cd deadlock-bot && cargo test
 
 # Cashier contract: 17 Hardhat tests (no local Node needed)

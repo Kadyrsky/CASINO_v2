@@ -114,17 +114,41 @@ Set `DEADLOCK_BOT_TOKEN` to require `Authorization: Bearer <token>` on every rou
 With `REDIS_URL` set, `serve` also follows match broadcasts for the website's realtime map (`src/feeds.rs`):
 the watcher's tracked matches first, then any match a viewer has open, up to `DEADLOCK_BOT_MAX_FEEDS` (12). Each
 broadcast is read by the [haste](https://github.com/blukai/haste) parser on its own thread (`src/live.rs`) and
-sampled twice a second into a frame: every hero's position, health, level, souls, K/D/A, items and ultimate, the
-objectives still standing, and kill, purchase, level-up and objective events. Frames go to Redis (`live:frame:{id}`
-and the channel `naebka:live-frames`).
+sampled twice a second into a frame: every hero's position, health, level, souls (net worth and unspent), K/D/A,
+last hits, denies, damage, items, abilities (unlocked, points) and ultimate; the objectives still standing; the Soul
+Urn (on the ground or carried, delivery pad, value); the Unstable Rift (appearing with a countdown, then open with
+each team's progress, who is on it, whether it is contested and when it closes); the neutral camps' respawn timers,
+the Sinner's Sacrifices' health, the Mid-Boss respawn and the bridge power-ups; and kill, purchase, level-up,
+ability, objective, Mid-Boss, urn and rift events. Frames go to Redis (`live:frame:{id}` and the channel
+`naebka:live-frames`).
 
 Broadcast URLs come from deadlock-api's public list (`/v1/matches/live/urls`). Only matches missing from it are
 spectated with the bot account, within the 5-minute spectate wait. One feed uses about 30 MB and a few percent of
 a CPU core.
 
-Two things learned from live broadcasts: Deadlock's position grid is now 128 × 128 cells of 512 units, so the origin
-is at cell 64 (haste's helper still assumes 64 × 64); and Valve sends the objective bitmasks only when they change, so
-a feed that joins mid-match has none until the next objective falls (the watcher keeps the live list's until then).
+Things learned from live broadcasts:
+
+* Deadlock's position grid is now 128 × 128 cells of 512 units, so the origin is at cell 64 (haste's helper still
+  assumes 64 × 64).
+* Valve sends the objective bitmasks only when they change, so a feed that joins mid-match has none until the next
+  objective falls (the watcher keeps the live list's until then).
+* Since early November 2026 broadcasts declare a field with a multi-argument template type
+  (`CNetworkUtlVectorBase< CNetworkUtlVectorBase< EEvent, NetworkVar_m_vecActiveEvents , -1, int > >`), which
+  upstream haste can't parse ("unknown char ,"): every feed failed. `vendor/haste_vartype` is haste's type parser with
+  that fixed, patched in through `[patch]` in `Cargo.toml`. Drop it once upstream haste handles these types.
+* Camps: the game rules hold one timer per camp (`m_vecNeutralCampTimerOrigins`, `m_vecNeutralCampNextSpawnTimes`,
+  `m_vecNeutralCampTimerIsMidBoss`), standing exactly on deadlock-api's camp positions. A timer is -1 while the camp is
+  up; clearing it sets the respawn time: 85 s for small camps, 290 s medium, 335 s hard, 300 s for a Sinner's
+  Sacrifice, 7 minutes for the Mid-Boss.
+* The rift: its spawner stands on the spot for exactly 5126 ticks (80 s) before the capture point opens, so the
+  countdown is the spawner's `m_flCreateTime` + 80 s. Once open, the game rules have its spot
+  (`m_vKothCashInCurrentLocation`) and `m_timeKothGiveUp`, a minute later. A capture sets `m_nKothScoringTeam` and
+  `m_timeKothScoring`.
+* The urn falls from the sky for about 12 s when it spawns (the bridge power-ups appear at the same moment), and its
+  delivery pad switches on when it lands.
+
+`deadlock-bot live <broadcast_url>` prints the frames as JSON lines, which is the quickest way to check a patch didn't
+break anything.
 
 ### Docker
 

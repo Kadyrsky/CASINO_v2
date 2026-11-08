@@ -1053,7 +1053,6 @@ dependencies = [
 [[package]]
 name = "haste_vartype"
 version = "0.0.0"
-source = "git+https://github.com/blukai/haste?rev=d2cdbf2cc13cadf12ec6c6b765f689a5894a6b36#d2cdbf2cc13cadf12ec6c6b765f689a5894a6b36"
 dependencies = [
  "thiserror 1.0.69",
 ]
