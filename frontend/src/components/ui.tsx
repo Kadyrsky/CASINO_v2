@@ -8,7 +8,7 @@ import { Portal } from 'solid-js/web';
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'success';
 
 const variants: Record<Variant, string> = {
-  primary: 'bg-gold-500 text-ink-950 hover:bg-gold-400 shadow-[0_6px_24px_-8px_rgb(226_164_67/0.6)]',
+  primary: 'btn-dl bg-gold-500 text-ink-950 hover:bg-gold-400 shadow-[0_6px_24px_-8px_color-mix(in_oklab,var(--color-gold-500)_60%,transparent)]',
   secondary: 'bg-ink-700 text-ink-100 hover:bg-ink-600 border border-ink-600',
   ghost: 'text-ink-200 hover:bg-ink-800 hover:text-ink-100',
   danger: 'bg-loss/90 text-white hover:bg-loss',
@@ -25,7 +25,7 @@ export function Button(
     <button
       {...rest}
       disabled={local.disabled || local.loading}
-      class={`inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-all duration-150 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-45 disabled:active:scale-100 ${variants[local.variant ?? 'primary']} ${size()} ${local.class ?? ''}`}
+      class={`dl-type inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-all duration-150 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-45 disabled:active:scale-100 ${variants[local.variant ?? 'primary']} ${size()} ${local.class ?? ''}`}
     >
       <Show when={local.loading}>
         <Spinner class="size-4" />
@@ -46,7 +46,7 @@ export function Spinner(props: { class?: string }) {
 
 export function Card(props: { class?: string; children: JSX.Element; title?: JSX.Element; actions?: JSX.Element }) {
   return (
-    <section class={`rounded-[var(--radius-card)] border border-ink-700/70 bg-ink-900/80 backdrop-blur ${props.class ?? ''}`}>
+    <section class={`dl-panel rounded-[var(--radius-card)] border border-ink-700/70 bg-ink-900/80 backdrop-blur ${props.class ?? ''}`}>
       <Show when={props.title || props.actions}>
         <header class="flex items-center justify-between gap-3 border-b border-ink-700/60 px-4 py-3">
           <h2 class="text-sm font-semibold tracking-wide text-ink-200">{props.title}</h2>
@@ -205,7 +205,7 @@ export function Tabs<T extends string>(props: { value: T; onChange: (v: T) => vo
           <button
             role="tab"
             aria-selected={props.value === o.value}
-            class={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${props.value === o.value ? 'bg-ink-700 text-ink-100 shadow' : 'text-ink-400 hover:text-ink-200'}`}
+            class={`dl-type rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${props.value === o.value ? 'bg-ink-700 text-ink-100 shadow' : 'text-ink-400 hover:text-ink-200'}`}
             onClick={() => props.onChange(o.value)}
           >
             {o.label}

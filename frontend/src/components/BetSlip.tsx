@@ -5,6 +5,7 @@ import { ApiError, newIdempotencyKey, post } from '../api/client';
 import type { Bet, Match } from '../api/types';
 import { auth } from '../lib/auth';
 import { betslip } from '../lib/betslip';
+import { ab } from '../lib/experiments';
 import { appConfig, fiat, odds, tokens } from '../lib/format';
 import { wallet } from '../lib/wallet';
 import { suspendLabel } from './match';
@@ -59,6 +60,7 @@ export function BetSlip(props: { match?: Match }) {
     setNotice(null);
     try {
       const bet = await post<Bet>('/api/bets', { selectionId: p.selection.id, stakeTokens: stakeNum(), expectedOdds: seenOdds(), acceptHigherOdds: acceptHigher() }, idempotencyKey);
+      ab.track('bet_placed');
       toast.success(`Bet placed: ${tokens(bet.stake)} on ${bet.selectionName} @ ${odds(bet.odds)}`);
       setSeenOdds(bet.odds);
       idempotencyKey = newIdempotencyKey();

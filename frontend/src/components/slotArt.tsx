@@ -5,6 +5,7 @@
  */
 import { For, Show } from 'solid-js';
 import type { SlotGame } from '../api/types';
+import { ab } from '../lib/experiments';
 import { tokens } from '../lib/format';
 
 export interface SymbolArt {
@@ -37,18 +38,62 @@ export const LINE_SYMBOLS = ['CHERRY', 'LEMON', 'BELL', 'CLOVER', 'GEM', 'SEVEN'
 const RIFT_MIN = 1;
 const RIFT_MAX = 25;
 
+/** The A/B "slot_icons" classic variant: the machine's original fruit-machine symbols. */
+const CLASSIC_ART: Record<string, string> = {
+  CHERRY: '🍒',
+  LEMON: '🍋',
+  BELL: '🔔',
+  CLOVER: '🍀',
+  GEM: '💎',
+  SEVEN: '7️⃣',
+  WILD: '🃏',
+  MULT: '🌟',
+  SCATTER: '💰',
+  BONUS: '🎁',
+};
+
+const CLASSIC_NAMES: Record<string, string> = {
+  CHERRY: 'Cherry',
+  LEMON: 'Lemon',
+  BELL: 'Bell',
+  CLOVER: 'Clover',
+  GEM: 'Diamond',
+  SEVEN: 'Lucky Seven',
+  WILD: 'Joker',
+  MULT: 'Star',
+  SCATTER: 'Money Bag',
+  BONUS: 'Gift Box',
+};
+
+/** A symbol's name: the server's Deadlock name, or the fruit-machine one in the classic variant. */
+export function symbolName(game: SlotGame | undefined, id: string): string {
+  if (ab.variant('slot_icons') === 'classic' && CLASSIC_NAMES[id]) return CLASSIC_NAMES[id]!;
+  return game?.symbols[id]?.name ?? id;
+}
+
 export function SymbolIcon(props: { id: string; class?: string }) {
   const art = () => SYMBOL_ART[props.id];
+  const classic = () => (ab.variant('slot_icons') === 'classic' ? CLASSIC_ART[props.id] : undefined);
   return (
-    <Show when={art()} fallback={<span class={props.class}>?</span>}>
-      {(a) => (
-        <img
-          src={a().src}
-          alt=""
-          draggable={false}
-          class={`${a().card ? 'rounded-md object-cover' : 'object-contain drop-shadow-[0_2px_6px_rgb(0_0_0/0.6)]'} ${props.class ?? 'size-7'}`}
-        />
-      )}
+    <Show
+      when={!classic()}
+      fallback={
+        // An SVG so the emoji scales with whatever box the caller gives it, like the images do.
+        <svg viewBox="0 0 100 100" class={props.class ?? 'size-7'} aria-hidden="true">
+          <text x="50" y="54" font-size="78" text-anchor="middle" dominant-baseline="middle">{classic()}</text>
+        </svg>
+      }
+    >
+      <Show when={art()} fallback={<span class={props.class}>?</span>}>
+        {(a) => (
+          <img
+            src={a().src}
+            alt=""
+            draggable={false}
+            class={`${a().card ? 'rounded-md object-cover' : 'object-contain drop-shadow-[0_2px_6px_rgb(0_0_0/0.6)]'} ${props.class ?? 'size-7'}`}
+          />
+        )}
+      </Show>
     </Show>
   );
 }
@@ -82,7 +127,7 @@ export function Paytable(props: { game?: SlotGame; betPerLine: number; totalBet:
       .sort(([, a], [, b]) => (b.pays['5'] ?? 0) - (a.pays['5'] ?? 0));
   const pay = (x: number | undefined) => (x == null ? '–' : tokens(x * props.betPerLine));
   const scatter = (n: number) => props.game?.scatterPays?.[String(n)];
-  const name = (id: string) => props.game?.symbols[id]?.name ?? id;
+  const name = (id: string) => symbolName(props.game, id);
   const special = [
     {
       id: 'WILD',
@@ -132,7 +177,7 @@ export function Paytable(props: { game?: SlotGame; betPerLine: number; totalBet:
                   <span class="flex items-center gap-2">
                     <SymbolIcon id={id} class="size-7" />
                     <span class="leading-tight">
-                      <span class="block text-ink-100">{s.name}</span>
+                      <span class="block text-ink-100">{name(id)}</span>
                       <Show when={SYMBOL_ART[id]?.tag}>{(t) => <span class="block text-[10px] font-semibold uppercase text-gold-300">{t()}</span>}</Show>
                     </span>
                   </span>

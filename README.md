@@ -320,6 +320,42 @@ Licensed countries (`naebka.registration.licensed-countries`): United Kingdom, M
 Republic, Netherlands, Croatia, Estonia, Italy, Latvia, Switzerland, Romania, Spain, Lithuania, North Macedonia,
 Germany, Hungary, Montenegro, Slovenia, Portugal, Belgium, Ireland, Bulgaria, Greece, Serbia, Slovakia.
 
+## A/B tests and feedback
+
+Every new visitor is given one version of each experiment at random and keeps it. The **Customize** button at the top
+right opens a drop-down where they can switch to another version at any time (the page updates behind it); on the
+first visit a pop-up points it out. The **Feedback** button in the corner opens a docked panel — no overlay, so people
+can keep using the site while they write, and the draft survives minimising and changing pages. It sends a 1–5
+rating, a category and an optional comment, together with the page, the screen size and the versions the visitor is on.
+
+| Experiment | Versions (first = current site) | Switchable |
+|---|---|---|
+| `theme` | Hidden King (amber), Archmother (sapphire), Deadlock (sewer green); Classic (the old gold look) can be picked but isn't given at random | yes |
+| `slot_icons` | Deadlock items, Classic fruit | yes |
+| `join_cta` | "Join", "Get 1,000 free NTK" | no |
+
+- **Where:** experiments are defined in `frontend/src/lib/experiments.ts` (with how to add one). The core
+  (`core/.../ab/AbController.java`, migration `V8__experiments.sql`) stores what visitors were given, what they are on
+  now, their switches, the goals they reach (registered, bet placed, spun slots, sat at poker) and their feedback.
+- **Results:** `/admin` → *A/B experiments* and *Feedback*. Results are counted by the version people were **first
+  given**, so the comparison stays fair even though people can switch; a high "switched away" share means people
+  don't like that version. ✱ marks goal rates that differ from the control by more than chance (p < 0.05).
+  For a gap like 10% vs 15% you need about 700 people per version.
+- **Testing a version:** open the site with `?ab=theme:archmother,slot_icons:classic` to force versions in that tab
+  (`?ab=` clears it). Forced visits are not counted, so Lighthouse runs and QA don't skew the results:
+  `npx lighthouse "http://localhost:8080/?ab=theme:archmother" --view`.
+- **Deadlock style:** the three Deadlock themes share a calm slate base modelled on
+  [thedeadlockobservatory.com](https://thedeadlockobservatory.com/) (solid panels, soft text, one accent) and switch on
+  the Deadlock look: the theme's emblem (its Patron, or the game's eye-and-wheel icon from Steam) drifting slowly
+  across the background, sharper panels, condensed uppercase headings and buttons, and main buttons whose plate
+  ticks right → centre → left like the game's (1.5°, 0.4 s per step). Deadlock's UI fonts (Valve Pulp, Retail) are Valve's and can't be
+  shipped, so they're used only if installed on the visitor's computer; everyone else gets the bundled
+  [Big Shoulders Display](https://fonts.google.com/specimen/Big+Shoulders+Display) (OFL). With a licensed copy of a
+  game font, add an `@font-face` named `Deadlock UI` in `frontend/src/styles.css` and it is used for everyone.
+  Animations stop for people who ask their system for reduced motion.
+- **Logged-in players** keep their versions across devices: after login the site takes over the visitor id and choices
+  the account had before.
+
 ## Tests
 
 ```bash

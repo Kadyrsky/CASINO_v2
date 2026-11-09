@@ -4,9 +4,10 @@ import { createMemo, createSignal, For, Index, onMount, Show } from 'solid-js';
 import { ApiError, get, post } from '../api/client';
 import type { BonusPick, Fairness, Page, SlotGame, SlotRound, SlotState, SpinResult } from '../api/types';
 import { toast } from '../components/toast';
-import { LINE_SYMBOLS, Paytable, SYMBOL_ART, SymbolIcon } from '../components/slotArt';
+import { LINE_SYMBOLS, Paytable, SYMBOL_ART, SymbolIcon, symbolName } from '../components/slotArt';
 import { Badge, Button, Card, Empty, Modal, PageHeader } from '../components/ui';
 import { auth } from '../lib/auth';
+import { ab } from '../lib/experiments';
 import { ago, fiat, humanize, tokens } from '../lib/format';
 import { wallet } from '../lib/wallet';
 import { useTopic } from '../lib/ws';
@@ -18,7 +19,7 @@ function SlotSymbol(props: { id: string; win?: boolean; spinning?: boolean; dela
   return (
     <div
       class={`relative grid aspect-square place-items-center overflow-hidden rounded-xl border bg-gradient-to-b to-ink-900 transition-all duration-300 ${art()?.tone ?? ''} ${
-        props.win ? 'scale-[1.04] border-gold-400 shadow-[0_0_24px_-4px_rgb(226_164_67/0.8)]' : 'border-ink-700'
+        props.win ? 'scale-[1.04] border-gold-400 shadow-[0_0_24px_-4px_color-mix(in_oklab,var(--color-gold-500)_80%,transparent)]' : 'border-ink-700'
       }`}
       title={props.spinning ? undefined : art()?.tag}
     >
@@ -41,6 +42,7 @@ function SlotSymbol(props: { id: string; win?: boolean; spinning?: boolean; dela
 
 export default function Slots() {
   const queryClient = useQueryClient();
+  onMount(() => ab.expose('slot_icons'));
   const game = createQuery(() => ({ queryKey: ['slot-game'], queryFn: async () => (await get<SlotGame[]>('/api/slots/games'))[0]! }));
   const state = createQuery(() => ({ queryKey: ['slot-state'], queryFn: () => get<SlotState>('/api/slots/state'), enabled: !!auth.user() }));
   const jackpot = createQuery(() => ({ queryKey: ['jackpot'], queryFn: () => get<{ amount: number }>('/api/slots/jackpot'), refetchInterval: 15_000 }));
@@ -89,6 +91,7 @@ export default function Slots() {
       await new Promise((ok) => setTimeout(ok, Math.max(0, 700 - (Date.now() - started))));
       setResult(r);
       wallet.set(r.balance);
+      ab.track('slot_spin');
       if (r.jackpotWin > 0) toast.success(`JACKPOT! ${tokens(r.jackpotWin)} NTK`);
       else if (r.freeSpinsAwarded > 0) toast.success(`${r.freeSpinsAwarded} free spins!`);
       else if (r.isBonusGameTriggered) toast.success('Rift bonus! Open 3 rifts.');
@@ -131,7 +134,11 @@ export default function Slots() {
     <div>
       <PageHeader
         title="Soul Reels"
-        subtitle="Deadlock slots: 5 reels · 10 lines · Patron wilds, Soul Urn free spins and the rift bonus. Provably fair."
+        subtitle={
+          ab.variant('slot_icons') === 'classic'
+            ? 'Classic slots: 5 reels · 10 lines · Joker wilds, Money Bag free spins and the gift bonus. Provably fair.'
+            : 'Deadlock slots: 5 reels · 10 lines · Patron wilds, Soul Urn free spins and the rift bonus. Provably fair.'
+        }
         actions={
           <div class="rounded-xl border border-gold-500/30 bg-gradient-to-r from-gold-500/15 to-transparent px-4 py-2">
             <p class="text-[11px] font-bold uppercase tracking-widest text-gold-300">Progressive jackpot</p>
@@ -199,7 +206,7 @@ export default function Slots() {
                           <span class="flex items-center gap-1.5 rounded-full bg-ink-850 py-0.5 pl-1 pr-2.5 text-xs ring-1 ring-ink-700">
                             <SymbolIcon id={l.symbol} class="size-5" />
                             <span class="text-ink-300">
-                              Line {l.paylineId}: {l.count} × {game.data?.symbols[l.symbol]?.name ?? l.symbol}
+                              Line {l.paylineId}: {l.count} × {symbolName(game.data, l.symbol)}
                             </span>
                             <span class="tabular font-semibold text-win">+{tokens(l.win)}</span>
                           </span>

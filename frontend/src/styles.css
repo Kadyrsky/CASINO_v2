@@ -4,6 +4,14 @@
 @theme {
   --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', Consolas, monospace;
+  /*
+   * Headings, buttons and labels in the Patron themes. Deadlock's UI fonts (Valve Pulp, Retail) are Valve's and can't
+   * be shipped, so they are used only when installed on the visitor's computer (as fan sites like
+   * thedeadlockobservatory.com do); everyone else gets Big Shoulders Display (OFL, 1920s condensed), bundled with the
+   * site. With a licensed copy of a game font, add an @font-face named 'Deadlock UI' and it takes over for everyone.
+   */
+  --font-display: 'Deadlock UI', 'ValvePulp', 'Valve Pulp', 'Retail', 'Big Shoulders Display Variable', 'Arial Narrow',
+    sans-serif;
 
   --color-ink-950: #0b0a10;
   --color-ink-900: #121019;
@@ -63,6 +71,75 @@
   }
 }
 
+/*
+ * A/B experiment "theme" (src/lib/experiments.ts). Three Deadlock themes share one calm base, after the fan site
+ * thedeadlockobservatory.com: a near-neutral slate page, solid panels, soft off-white text, and one accent colour
+ * used sparingly. Each theme only tints the slate slightly and picks its accent. The live-map team colours
+ * (amber-team / sapphire-team) stay as they are, since they mean a team, not the theme. Classic keeps the old look.
+ */
+:root[data-ab-style='deadlock'] {
+  --color-ink-950: #191d23;
+  --color-ink-900: #242830;
+  --color-ink-850: #1e222a;
+  --color-ink-800: #2b303a;
+  --color-ink-700: #333842;
+  --color-ink-600: #3d4450;
+  --color-ink-500: #596371;
+  --color-ink-400: #9299a5;
+  --color-ink-300: #b5bbc5;
+  --color-ink-200: #d3d7de;
+  --color-ink-100: #e8ebf1;
+}
+
+/* The Hidden King, patron of the Amber Hand: a soft amber on warm graphite. */
+:root[data-ab-theme='hidden_king'] {
+  --color-gold-300: #f2d3a2;
+  --color-gold-400: #e8bd7c;
+  --color-gold-500: #dba661;
+  --color-gold-600: #b48447;
+
+  --color-ink-950: #1c1b19;
+  --color-ink-900: #272522;
+  --color-ink-850: #211f1c;
+  --color-ink-800: #2f2c28;
+  --color-ink-700: #3a3631;
+
+  --patron-tile: url('/images/patron-0-tile.webp');
+}
+
+/* The Archmother, patron of the Sapphire Flame: a soft sapphire on cool slate. */
+:root[data-ab-theme='archmother'] {
+  --color-gold-300: #c3d3f7;
+  --color-gold-400: #9cb6f1;
+  --color-gold-500: #789ce8;
+  --color-gold-600: #5878c6;
+
+  --color-ink-950: #181c24;
+  --color-ink-900: #232833;
+  --color-ink-850: #1d222b;
+  --color-ink-800: #2a303c;
+  --color-ink-700: #343b49;
+
+  --patron-tile: url('/images/patron-1-tile.webp');
+}
+
+/* Deadlock: sewer green, the Observatory's pale lime on a green-grey, with the game's eye-and-wheel emblem. */
+:root[data-ab-theme='deadlock'] {
+  --color-gold-300: #e6fbb5;
+  --color-gold-400: #d9f891;
+  --color-gold-500: #bcdc72;
+  --color-gold-600: #93b252;
+
+  --color-ink-950: #171c18;
+  --color-ink-900: #212822;
+  --color-ink-850: #1b211c;
+  --color-ink-800: #29312a;
+  --color-ink-700: #323c34;
+  --color-ink-600: #3c4840;
+
+  --patron-tile: url('/images/deadlock-tile.webp');
+}
+
 @layer base {
   html {
     color-scheme: dark;
@@ -79,5 +156,128 @@
   }
   .tabular {
     font-variant-numeric: tabular-nums;
+  }
+}
+
+/*
+ * Deadlock style, on with the Deadlock themes (data-ab-style="deadlock", set in src/lib/experiments.ts).
+ * The Classic theme keeps the old look.
+ */
+:root[data-ab-style='deadlock'] {
+  /* Sharper, less rounded panels and buttons (rounded-full pills stay round). */
+  --radius-sm: 2px;
+  --radius-md: 2px;
+  --radius-lg: 3px;
+  --radius-xl: 4px;
+  --radius-2xl: 6px;
+  --radius-card: 4px;
+}
+
+:root[data-ab-style='deadlock'] :is(h1, h2, h3, h4, .dl-type) {
+  font-family: var(--font-display);
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.045em;
+}
+:root[data-ab-style='deadlock'] h1 {
+  font-size: 2.4rem;
+  line-height: 1;
+  letter-spacing: 0.03em;
+}
+
+/* Flat like the Observatory: a plain page, solid panels (the pattern doesn't show through), no glows. */
+:root[data-ab-style='deadlock'] body {
+  background-image: radial-gradient(1100px 500px at 15% -15%, color-mix(in oklab, var(--color-gold-500) 6%, transparent), transparent 65%);
+}
+:root[data-ab-style='deadlock'] .dl-panel {
+  background-color: var(--color-ink-900);
+  border-color: var(--color-ink-700);
+  backdrop-filter: none;
+}
+:root[data-ab-style='deadlock'] header.sticky {
+  background-color: color-mix(in oklab, var(--color-ink-950) 92%, transparent);
+}
+
+/* The theme's emblem (a Patron, or the Deadlock eye) drifts slowly and diagonally across the background. */
+.patron-bg {
+  display: none;
+}
+:root[data-ab-style='deadlock'] .patron-bg {
+  display: block;
+  position: fixed;
+  /* One tile bigger than the screen on every side, so moving by one tile never shows an edge. */
+  inset: -192px;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--color-gold-500);
+  opacity: 0.045;
+  mask-image: var(--patron-tile), var(--patron-tile);
+  mask-size: 192px 192px;
+  mask-position: 0 0, 96px 96px;
+  mask-repeat: repeat;
+  animation: patron-drift 90s linear infinite;
+  will-change: transform;
+}
+@keyframes patron-drift {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(192px, 192px, 0);
+  }
+}
+
+/*
+ * Main buttons: like Deadlock's, the coloured plate behind the text ticks right, centre, left, holds, and snaps back
+ * to the right (0.4 s per step, about a second on the left). The tilt is small, like the tags on
+ * thedeadlockobservatory.com (1–2°). The text stays still.
+ */
+:root[data-ab-style='deadlock'] .btn-dl {
+  position: relative;
+  isolation: isolate;
+  background-color: transparent;
+  box-shadow: none;
+}
+:root[data-ab-style='deadlock'] .btn-dl::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--color-gold-500);
+  transform: rotate(var(--dl-tilt));
+  animation: dl-wobble 1.8s step-end infinite;
+}
+:root[data-ab-style='deadlock'] .btn-dl:hover::before {
+  background: var(--color-gold-400);
+}
+:root[data-ab-style='deadlock'] .btn-dl:disabled::before {
+  animation: none;
+  transform: none;
+}
+.btn-dl {
+  --dl-tilt: 1.5deg;
+}
+/* Full-width buttons tilt less, or their ends would swing into the fields around them. */
+.btn-dl.w-full {
+  --dl-tilt: 0.5deg;
+}
+@keyframes dl-wobble {
+  0% {
+    transform: rotate(var(--dl-tilt));
+  }
+  22% {
+    transform: rotate(0deg);
+  }
+  44%,
+  100% {
+    transform: rotate(calc(var(--dl-tilt) * -1));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-ab-style='deadlock'] .patron-bg,
+  :root[data-ab-style='deadlock'] .btn-dl::before {
+    animation: none;
   }
 }

@@ -3,6 +3,7 @@ import { createQuery, useQueryClient } from '@tanstack/solid-query';
 import { createSignal, For, Show } from 'solid-js';
 import { get, post } from '../api/client';
 import type { KycSubmission, Match } from '../api/types';
+import { ExperimentsCard, FeedbackCard } from '../components/adminAb';
 import { KycChecks } from '../components/kyc';
 import { toast } from '../components/toast';
 import { Badge, Button, Card, Empty, Input, PageHeader, Stat } from '../components/ui';
@@ -126,7 +127,7 @@ export default function Admin() {
   const beat = (iso: string | null | undefined) => (iso ? (/^\d+$/.test(iso) ? ago(new Date(Number(iso) * 1000).toISOString()) : ago(iso)) : 'missing');
   return (
     <div>
-      <PageHeader title="Integrity dashboard" subtitle="Fleet health, the settlement and KYC review queues and ledger reconciliation." />
+      <PageHeader title="Integrity dashboard" subtitle="Fleet health, the settlement and KYC review queues, ledger reconciliation, A/B experiments and feedback." />
       <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card class="p-4">
           <Stat
@@ -176,6 +177,8 @@ export default function Admin() {
           </ul>
         </Show>
       </Card>
+      <ExperimentsCard />
+      <FeedbackCard />
     </div>
   );
 }
