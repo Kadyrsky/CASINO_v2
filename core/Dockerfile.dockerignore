@@ -1,0 +1,8 @@
+# core/Dockerfile builds from the repository root; send only core/ and frontend/ to Docker.
+*
+!core/pom.xml
+!core/src/
+!frontend/
+**/node_modules
+**/dist
+**/target

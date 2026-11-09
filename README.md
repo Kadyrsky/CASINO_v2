@@ -20,8 +20,7 @@ Live matches appear within ~10 s: the watcher picks fresh ranked games from `api
 
 | Service | Port (host) | What it is |
 |---|---|---|
-| `web` | 8080 | SolidJS SPA on nginx; reverse-proxies `/api` and `/ws` to `core` |
-| `core` | 8081 | Spring Boot API (Swagger UI: <http://localhost:8081/api/docs>) |
+| `core` | 8080, 8081 | Spring Boot: serves the SolidJS frontend, `/api` and `/ws` (Swagger UI: <http://localhost:8081/api/docs>) |
 | `postgres` | 55432 | PostgreSQL 17 (non-default port so it doesn't clash with a local install) |
 | `redis` | 56379 | Redis 7: message broker and WebSocket fan-out |
 | `watcher` | – | Python: polls the Deadlock API and publishes normalized match events |
@@ -170,7 +169,7 @@ flowchart LR
   W -.->|on 429 / down| SB[deadlock-bot<br/>Rust, Steam]
   C -.->|on 429 / down| SB
   SB -->|Steam game coordinator| V[(Valve)]
-  B[Browser<br/>SolidJS] -->|REST + WebSocket| N[nginx] --> C
+  B[Browser<br/>SolidJS] -->|pages + REST + WebSocket| C
 ```
 
 * **Transactional core** (modular monolith): auth, wallet/ledger, responsible gambling, live betting, settlement
@@ -392,6 +391,7 @@ Where the documents disagreed or left things open, this is what was built and wh
 
 | Topic | Documents say | Built | Why |
 |---|---|---|---|
+| Frontend hosting | Architecture: Docker Compose behind an Nginx reverse proxy | The core serves the built frontend (`config/FrontendConfig.java`); the Docker image builds `frontend/` | One container fewer and no proxy config; HTTPS for the domain is still a reverse proxy on the server |
 | Odds model | LLD: pari-mutuel; Technical Design: heuristic fixed odds | Heuristic fixed odds with suspend-then-reprice | Matches the architecture and risk docs (courtsiding defense needs fixed prices) |
 | Payments | Architecture: PSP webhooks; DB: Bitcoin; DoD: play money | Play-money deposit/withdraw endpoints, plus Sepolia test-ETH deposits and withdrawals through MetaMask (`eth/*`, `contracts/`); `btc_payments` table exists but is unused | No licence; the DoD milestone is play money, and Sepolia ETH has no value |
 | Login | Steam OpenID + email/password | Username/password + JWT; `/api/auth/steam` returns 501 | Steam needs a public return URL; insider-betting check (`BETTOR_IS_PARTICIPANT`) depends on it |

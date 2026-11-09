@@ -47,6 +47,9 @@ public class SecurityConfig {
                         .requestMatchers("/api/docs/**", "/api/openapi.json/**", "/swagger-ui/**", "/actuator/health",
                                 "/ws/**").permitAll()
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                        // The frontend (FrontendConfig): every GET/HEAD outside /api is a page or a static file.
+                        .requestMatchers(r -> (HttpMethod.GET.matches(r.getMethod()) || HttpMethod.HEAD.matches(r.getMethod()))
+                                && !r.getRequestURI().startsWith(r.getContextPath() + "/api/")).permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(o -> o
                         .jwt(j -> j.jwtAuthenticationConverter(jwt -> new JwtAuthenticationToken(jwt,
