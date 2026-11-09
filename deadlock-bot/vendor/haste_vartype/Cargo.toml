@@ -1,0 +1,18 @@
+# haste's var-type parser (https://github.com/blukai/haste, rev d2cdbf2, BSD-3-Clause), with one fix: Deadlock
+# broadcasts since early November 2026 declare a field as
+# `CNetworkUtlVectorBase< CNetworkUtlVectorBase< EEvent, NetworkVar_m_vecActiveEvents , -1, int > >`, and upstream
+# rejects the commas ("unknown char ,"), so no broadcast could be parsed. Template arguments after the first are now
+# skipped: they don't change how a field decodes. Used through `[patch]` in ../../Cargo.toml; drop it once upstream
+# haste handles these types.
+[package]
+name = "haste_vartype"
+version = "0.0.0"
+edition = "2021"
+license = "BSD-3-Clause"
+publish = false
+
+[dependencies]
+thiserror = "1.0.64"
+
+[dev-dependencies]
+expect-test = "1.5.0"

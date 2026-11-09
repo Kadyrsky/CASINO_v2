@@ -201,6 +201,13 @@ def compact_assets(heroes: list[Any], ranks: list[Any], items: list[Any], world:
     def image(images: dict[str, Any], *names: str) -> str | None:
         return next((images[n] for n in names if images.get(n)), None)
 
+    def points(rows: Any) -> list[list[float]]:
+        return [[r["position"][0], r["position"][1]] for r in rows or []
+                if isinstance(r, dict) and len(r.get("position") or []) >= 2]
+
+    raw_entities = world.get("entities")
+    entities: dict[str, Any] = raw_entities if isinstance(raw_entities, dict) else {}
+
     return {
         "heroes": {
             str(h["id"]): {
@@ -241,6 +248,16 @@ def compact_assets(heroes: list[Any], ranks: list[Any], items: list[Any], world:
                 {"color": z.get("color"), "points": [[z["origin"][0] + p[0], z["origin"][1] + p[1]] for p in z.get("P0_points", [])]}
                 for z in world.get("zipline_paths") or [] if isinstance(z, dict) and z.get("origin")
             ],
+            # Neutral camps (weak, medium, strong; "vault" is a Sinner's Sacrifice). The bot's frames carry each
+            # camp's timer at the same position, so the map matches them by distance to get the kind.
+            "camps": [
+                {"kind": c.get("kind"), "x": c["position"][0], "y": c["position"][1]}
+                for c in world.get("neutral_camps") or [] if isinstance(c, dict) and len(c.get("position") or []) >= 2
+            ],
+            # Where the Soul Urn can appear and where it is delivered, and the Unstable Rift's two spots.
+            "urn_spawns": points(entities.get("soul_urn_spawns")),
+            "urn_pads": points(entities.get("soul_urn_pads")),
+            "rift_spots": points(entities.get("unstable_rifts")),
         },
     }
 

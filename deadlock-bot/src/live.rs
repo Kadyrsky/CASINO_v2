@@ -1,8 +1,9 @@
 //! Live map feed: reads a match's Valve broadcast (the stream the in-game spectator uses, served over HTTP by
 //! Valve's relays) with the [haste](https://github.com/blukai/haste) parser and turns it into compact frames:
-//! every hero's position, health, level, souls, K/D/A and items, the objectives still standing, the Soul Urn and the
-//! Unstable Rift, and events (kills, purchases, abilities unlocked and upgraded, objectives destroyed, urn and rift).
-//! The broadcast runs about 20 s behind the real game.
+//! every hero's position, health, level, souls, K/D/A, items and abilities, the objectives still standing, the Soul
+//! Urn, the Unstable Rift, the neutral camps (with the Sinner's Sacrifices and the Mid-Boss respawn) and the bridge
+//! power-ups, and events (kills, purchases, abilities unlocked and upgraded, objectives destroyed, Mid-Boss, urn and
+//! rift). The broadcast runs about 20 s behind the real game.
 //!
 //! haste's parser is single-threaded (`Rc` inside), so each feed runs on its own thread with its own runtime;
 //! frames leave through a channel.
@@ -19,7 +20,7 @@ use haste::entities::{DeltaHeader, Entity, ehandle_to_index, fkey_from_path};
 use haste::fxhash;
 use haste::parser::{Context, Parser, Visitor};
 use haste::valveprotos::common::{CnetMsgTick, EDemoCommands, NetMessages};
-use haste::valveprotos::deadlock::{CCitadelUserMessageObjectiveMask, CCitadelUserMsgHeroKilled};
+use haste::valveprotos::deadlock::{CCitadelUserMessageObjectiveMask, CCitadelUserMsgBossKilled, CCitadelUserMsgHeroKilled};
 use haste::valveprotos::prost::Message;
 use serde::Serialize;
 
@@ -27,6 +28,9 @@ use crate::gc::DEADLOCK_APP_ID;
 
 const MSG_HERO_KILLED: u32 = 319;
 const MSG_OBJECTIVE_MASK: u32 = 324;
+const MSG_BOSS_KILLED: u32 = 347;
+/// `objective_team` of a `BossKilled` message for the Mid-Boss (the neutral team; seen on live broadcasts).
+const NEUTRAL_TEAM: i32 = 4;
 /// Steam IDs are 64-bit; Deadlock account ids are the low 32 bits.
 const STEAM_ID_BASE: u64 = 76_561_197_960_265_728;
 /// An entity handle that points at nothing.
@@ -45,11 +49,21 @@ const URN_DELIVERY: u64 = fxhash::hash_bytes(b"CCitadelIdolReturnTrigger");
 // capture point (the cash-in) opens there. Capture progress, the deadline and the winner are in the game rules.
 const RIFT_SPAWNER: u64 = fxhash::hash_bytes(b"CCitadelItemKothSpawner");
 const RIFT_OPEN: u64 = fxhash::hash_bytes(b"CCitadel_KothCashIn");
+/// How long after the spawner appears the rift opens: 5126 ticks on every live broadcast measured.
+const RIFT_OPENS_AFTER_S: f32 = 80.1;
+/// A Sinner's Sacrifice (the "vault" camps): 500 health, taken 100 at a time, souls for every hit.
+const SINNER: u64 = fxhash::hash_bytes(b"CNPC_Neutral_SinnersSacrifice");
+/// The two bridge power-up spawners (both drop at once, every few minutes).
+const POWERUP_SPAWNER: u64 = fxhash::hash_bytes(b"CCitadel_PickupItemSpawner");
 
 const ITEM_ID: u64 = fxhash::hash_bytes(b"m_ItemID");
 const UPGRADE_INFO: u64 = fxhash::hash_bytes(b"m_nUpgradeInfo");
 const CAPTURE_PROGRESS: u64 = fxhash::hash_bytes(b"m_flCaptureProgressFrac");
 const CAPTURER_COUNT: u64 = fxhash::hash_bytes(b"m_nCapturerCount");
+const IS_BLOCKED: u64 = fxhash::hash_bytes(b"m_bIsBlocked");
+const PARTICIPANTS: u64 = fxhash::hash_bytes(b"m_vecParticipants");
+/// Valve's "no value" for times and positions (FLT_MAX).
+const UNSET: f32 = 1e30;
 
 /// Map objectives: serializer name hash → kind shown on the map.
 const OBJECTIVES: [(u64, &str); 6] = [
@@ -84,10 +98,55 @@ pub struct Player {
     pub respawn_in_s: Option<f32>,
     pub ult_ready: bool,
     pub items: Vec<u32>,
+    /// The hero's four abilities in slot order (the fourth is the ultimate).
+    pub abilities: Vec<Ability>,
     pub x: Option<f32>,
     pub y: Option<f32>,
     pub hp: Option<i32>,
     pub max_hp: Option<i32>,
+    /// Souls not spent yet.
+    pub souls: Option<i32>,
+    pub last_hits: Option<i32>,
+    pub denies: Option<i32>,
+    pub hero_damage: Option<i32>,
+    pub objective_damage: Option<i32>,
+}
+
+/// One of a hero's abilities: locked until unlocked, then up to three ability points.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+pub struct Ability {
+    pub id: u32,
+    pub unlocked: bool,
+    /// Ability points put into it, 0 to 3.
+    pub tier: u32,
+}
+
+/// A neutral camp's in-game timer (the circle the minimap shows when a camp is down). Camps here include the
+/// Sinner's Sacrifices; the Mid-Boss has its own timer ([`Frame::midboss_respawn_in_s`]).
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct Camp {
+    /// Position in the game's timer list (stable for the match).
+    pub id: usize,
+    pub x: f32,
+    pub y: f32,
+    /// Seconds until it is back; None while it is up.
+    pub respawn_in_s: Option<f32>,
+}
+
+/// A Sinner's Sacrifice that still has health.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct Sinner {
+    pub x: f32,
+    pub y: f32,
+    pub hp: i32,
+    pub max_hp: i32,
+}
+
+/// A bridge power-up waiting to be picked up.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct Powerup {
+    pub x: f32,
+    pub y: f32,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -111,18 +170,26 @@ pub struct Urn {
     pub carrier: Option<u32>,
     /// Where it has to be taken, once someone has picked it up.
     pub delivery: Option<[f32; 2]>,
+    /// Souls it gives the team that delivers it.
+    pub value: Option<i32>,
 }
 
-/// The Unstable Rift: appearing on a bridge, then open as a capture point.
+/// The Unstable Rift: appearing on a side lane, then open as a capture point for about a minute.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct Rift {
     pub x: f32,
     pub y: f32,
     pub open: bool,
+    /// Seconds until an appearing rift opens.
+    pub opens_in_s: Option<f32>,
     /// Each team's capture progress, 0 to 1.
     pub progress: [f32; 2],
     /// Each team's players on the point.
     pub capturers: [i32; 2],
+    /// Both teams are on the point, so neither makes progress.
+    pub contested: bool,
+    /// Hero ids of each team's players on the point.
+    pub heroes: [Vec<u32>; 2],
     /// Seconds until an open rift closes if nobody captures it.
     pub closes_in_s: Option<f32>,
 }
@@ -138,6 +205,8 @@ pub enum Event {
     /// An ability point put into an unlocked ability: tier 1 to 3.
     AbilityUpgraded { time_s: f32, account_id: u32, ability_id: u32, tier: u32 },
     ObjectiveDestroyed { time_s: f32, kind: &'static str, team: Option<u8>, lane: Option<i32> },
+    /// The Mid-Boss fell to `killer` (when it was a hero) of `team`.
+    MidbossKilled { time_s: f32, team: Option<u8>, killer: Option<u32> },
     UrnSpawned { time_s: f32 },
     UrnPickedUp { time_s: f32, account_id: u32 },
     UrnDropped { time_s: f32, account_id: u32 },
@@ -154,6 +223,44 @@ pub enum Event {
 fn ability_level(info: u32) -> (bool, u32) {
     let bits = (info >> 16) & 0xF;
     (bits & 1 != 0, (bits >> 1).count_ones())
+}
+
+fn ability_states(raw: &[(u32, u32)]) -> Vec<Ability> {
+    raw.iter()
+        .map(|&(id, info)| {
+            let (unlocked, tier) = ability_level(info);
+            Ability { id, unlocked, tier }
+        })
+        .collect()
+}
+
+/// One camp timer from the game rules: where, when it comes back (server time; negative while it is up), and
+/// whether it is the Mid-Boss's.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct CampTimer {
+    /// Position in the game's list.
+    id: usize,
+    x: f32,
+    y: f32,
+    next_spawn: f32,
+    midboss: bool,
+}
+
+/// The camps to show and the Mid-Boss's respawn, at server time `now`.
+fn camps_at(timers: &[CampTimer], now: f32) -> (Vec<Camp>, Option<f32>) {
+    let left = |t: &CampTimer| (t.next_spawn > 0.0 && t.next_spawn < UNSET).then(|| (t.next_spawn - now).max(0.0));
+    let camps = timers
+        .iter()
+        .filter(|t| !t.midboss)
+        .map(|t| Camp { id: t.id, x: t.x.round(), y: t.y.round(), respawn_in_s: left(t).map(|s| s.round()) })
+        .collect();
+    let midboss = timers.iter().filter(|t| t.midboss).find_map(left).map(f32::round);
+    (camps, midboss)
+}
+
+/// A position Valve set (not FLT_MAX, and not the origin it holds before the first rift).
+fn valid_location(v: [f32; 3]) -> Option<[f32; 2]> {
+    (v[0].abs() < UNSET && v[1].abs() < UNSET && (v[0], v[1]) != (0.0, 0.0)).then_some([v[0], v[1]])
 }
 
 /// The events between two readings of one player's abilities (ability id, upgrade info).
@@ -205,17 +312,23 @@ fn rift_events(time_s: f32, before: Option<&Rift>, now: Option<&Rift>, captured_
     out
 }
 
-/// What the game rules say about the rift (updated as they change).
+/// What the game rules say about the rift (updated as they change). Read from live broadcasts: nothing while it
+/// appears (the spawner entity stands there for 80 s); when it opens, `m_timeKothCashInStarted` and
+/// `m_vKothCashInCurrentLocation` are set, and `m_timeKothGiveUp` a moment later to a minute after the start (FLT_MAX
+/// until then). A capture sets the scoring team and time, then the start, give-up and location are cleared.
 #[derive(Default)]
 struct RiftRules {
-    /// Server time when an open rift gives up; 0 while none is open.
+    /// Server time when an open rift gives up; 0 or FLT_MAX while none is open.
     give_up: f32,
+    location: Option<[f32; 2]>,
     /// Server time of the last capture; a new value means a new capture.
     scoring_time: f32,
     scoring_team: Option<u8>,
     /// Per team (Hidden King first), from `m_vecTeamKothStates`.
     progress: [f32; 2],
     capturers: [i32; 2],
+    blocked: [bool; 2],
+    heroes: [Vec<u32>; 2],
 }
 
 /// One sample of the match, about twice a second of game time.
@@ -239,6 +352,11 @@ pub struct Frame {
     pub objectives: Vec<Objective>,
     pub urn: Option<Urn>,
     pub rift: Option<Rift>,
+    pub camps: Vec<Camp>,
+    /// Seconds until the Mid-Boss is back, while it is dead.
+    pub midboss_respawn_in_s: Option<f32>,
+    pub sinners: Vec<Sinner>,
+    pub powerups: Vec<Powerup>,
     pub events: Vec<Event>,
 }
 
@@ -311,6 +429,29 @@ fn abilities(c: &Entity) -> Vec<(u32, u32)> {
         .collect()
 }
 
+/// The game rules' camp timers: three parallel arrays (origin, next spawn time, is the Mid-Boss), one entry per camp,
+/// in a fixed order. Measured on live broadcasts: the next spawn time is -1 while a camp is up and is set when it is
+/// cleared (weak camps come back after 85 s, medium 290 s, strong 335 s, Sinner's Sacrifices 300 s, the Mid-Boss
+/// 7 min); the origins are the camps' positions in deadlock-api's map data.
+fn camp_timers(rules: &Entity) -> Vec<CampTimer> {
+    let origins = key!("m_pGameRules", "m_vecNeutralCampTimerOrigins");
+    let next = key!("m_pGameRules", "m_vecNeutralCampNextSpawnTimes");
+    let midboss = key!("m_pGameRules", "m_vecNeutralCampTimerIsMidBoss");
+    let len = int(rules, origins).and_then(|n| usize::try_from(n).ok()).unwrap_or(0).min(128);
+    (0..len)
+        .filter_map(|i| {
+            let [x, y, _] = rules.get_value::<[f32; 3]>(&element(origins, i))?;
+            Some(CampTimer {
+                id: i,
+                x,
+                y,
+                next_spawn: rules.get_value(&element(next, i)).unwrap_or(-1.0),
+                midboss: rules.get_value(&element(midboss, i)).unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
 /// Elements of a dynamic array field. The base key holds the length; haste keys element i as base key + hash(i).
 fn array_u32(e: &Entity, base: u64, max: usize) -> Vec<u32> {
     let len = int(e, base).and_then(|n| usize::try_from(n).ok()).unwrap_or(0).min(max);
@@ -347,6 +488,9 @@ struct Sampler {
     masks: Option<[u64; 2]>,
     winning_team: Option<u8>,
     rift_rules: RiftRules,
+    camp_timers: Vec<CampTimer>,
+    /// The urn's value, kept while it is carried (only the pickup on the ground has it).
+    urn_value: Option<i32>,
     /// What the previous frame said, to turn changes into events.
     previous: HashMap<u32, (i32, Vec<u32>)>,
     previous_abilities: HashMap<u32, Vec<(u32, u32)>>,
@@ -389,7 +533,8 @@ impl Sampler {
         let mut pawns: HashMap<(u32, u8), &Entity> = HashMap::new();
         let mut objectives = Vec::new();
         let (mut urn_ground, mut urn_pawn, mut urn_delivery) = (None, None, None);
-        let (mut rift_spawner, mut rift_open) = (None, None);
+        let (mut rift_spawner, mut rift_open, mut rift_spawned_at) = (None, None, None);
+        let (mut sinners, mut powerups) = (Vec::new(), Vec::new());
         for (&index, e) in entities.iter() {
             if e.serializer_name_heq(PAWN) {
                 let hero = int(e, key!("m_CCitadelHeroComponent", "m_spawnedHero", "m_nHeroID"))
@@ -415,7 +560,25 @@ impl Sampler {
                     max_hp: int32(e, key!("m_iMaxHealth")).unwrap_or(hp).max(hp),
                 });
             } else if e.serializer_name_heq(URN) {
-                urn_ground = urn_ground.or_else(|| position(e));
+                if urn_ground.is_none() {
+                    urn_ground = position(e);
+                    if let Some(v) = int32(e, key!("m_nCurrencyValue")).filter(|&v| v > 0) {
+                        self.urn_value = Some(v);
+                    }
+                }
+            } else if e.serializer_name_heq(SINNER) {
+                // A cracked sacrifice keeps 1 health until its camp comes back.
+                let hp = int32(e, key!("m_iHealth")).unwrap_or(0);
+                if let (Some((x, y)), true) = (position(e), hp > 1) {
+                    let max_hp = int32(e, key!("m_iMaxHealth")).unwrap_or(hp).max(hp);
+                    sinners.push(Sinner { x: x.round(), y: y.round(), hp, max_hp });
+                }
+            } else if e.serializer_name_heq(POWERUP_SPAWNER) {
+                if e.get_value::<bool>(&key!("m_bPowerupActive")) == Some(true)
+                    && let Some((x, y)) = position(e)
+                {
+                    powerups.push(Powerup { x: x.round(), y: y.round() });
+                }
             } else if e.serializer_name_heq(URN_CARRIED) {
                 // Attached to the carrier's hero.
                 urn_pawn = int(e, key!("CBodyComponent", "m_hParent"))
@@ -428,7 +591,10 @@ impl Sampler {
                     urn_delivery = position(e);
                 }
             } else if e.serializer_name_heq(RIFT_SPAWNER) {
-                rift_spawner = rift_spawner.or_else(|| position(e));
+                if rift_spawner.is_none() {
+                    rift_spawner = position(e);
+                    rift_spawned_at = e.get_value::<f32>(&key!("m_flCreateTime"));
+                }
             } else if e.serializer_name_heq(RIFT_OPEN) && e.get_value::<bool>(&key!("m_bDisabled")) != Some(true) {
                 rift_open = rift_open.or_else(|| position(e));
             }
@@ -451,7 +617,9 @@ impl Sampler {
             let alive = c.get_value::<bool>(&key!("m_PlayerDataGlobal", "m_bAlive")).unwrap_or(true);
             let pos = pawns.get(&(hero_id, team)).and_then(|p| position(p));
             let respawn = c.get_value::<f32>(&key!("m_PlayerDataGlobal", "m_flRespawnTime"));
-            abilities_now.insert(account_id, abilities(c));
+            let raw_abilities = abilities(c);
+            let ability_list = ability_states(&raw_abilities);
+            abilities_now.insert(account_id, raw_abilities);
             players.push(Player {
                 slot: index,
                 account_id,
@@ -468,10 +636,16 @@ impl Sampler {
                     && c.get_value::<f32>(&key!("m_PlayerDataGlobal", "m_flUltimateCooldownEnd"))
                         .is_none_or(|end| end <= now),
                 items: array_u32(c, key!("m_PlayerDataGlobal", "m_vecUpgrades"), 64),
+                abilities: ability_list,
                 x: pos.map(|p| p.0.round()),
                 y: pos.map(|p| p.1.round()),
                 hp: data("m_iHealth"),
                 max_hp: data("m_iHealthMax"),
+                souls: data("m_iGold"),
+                last_hits: data("m_iLastHits"),
+                denies: data("m_iDenies"),
+                hero_damage: data("m_iHeroDamage"),
+                objective_damage: data("m_iObjectiveDamage"),
             });
         }
         players.sort_by_key(|p| (p.team, p.slot));
@@ -498,27 +672,52 @@ impl Sampler {
         // The urn: carried (at the carrier), on the ground, or not in play.
         let carrier = urn_pawn.and_then(|i| self.account_of_pawn(ctx, i));
         let delivery = urn_delivery.map(|(x, y): (f32, f32)| [x.round(), y.round()]);
+        let value = self.urn_value;
         let urn = match carrier {
             Some(a) => players
                 .iter()
                 .find(|p| p.account_id == a)
                 .and_then(|p| p.x.zip(p.y))
                 .or_else(|| self.previous_urn.as_ref().map(|u| (u.x, u.y)))
-                .map(|(x, y)| Urn { x, y, carrier: Some(a), delivery }),
-            None => urn_ground.map(|(x, y)| Urn { x: x.round(), y: y.round(), carrier: None, delivery }),
+                .map(|(x, y)| Urn { x, y, carrier: Some(a), delivery, value }),
+            None => urn_ground.map(|(x, y)| Urn { x: x.round(), y: y.round(), carrier: None, delivery, value }),
         };
-        // The rift: open (with the game rules' progress), appearing, or not in play.
+        if urn.is_none() {
+            self.urn_value = None;
+        }
+        // The rift: open (with the game rules' progress), appearing, or not in play. The game rules have its exact
+        // spot; the entities stand a little off it.
         let rules = &self.rift_rules;
+        let until = |t: f32| (t > 0.0 && t < UNSET).then(|| (t - now).max(0.0).round());
         let rift = match (rift_open, rift_spawner) {
-            (Some((x, y)), _) => Some(Rift {
-                x: x.round(),
-                y: y.round(),
-                open: true,
-                progress: rules.progress,
-                capturers: rules.capturers,
-                closes_in_s: (rules.give_up > 0.0).then(|| (rules.give_up - now).max(0.0)),
-            }),
-            (None, Some((x, y))) => Some(Rift { x: x.round(), y: y.round(), open: false, progress: [0.0; 2], capturers: [0; 2], closes_in_s: None }),
+            (Some(at), _) => {
+                let [x, y] = rules.location.unwrap_or([at.0, at.1]);
+                Some(Rift {
+                    x: x.round(),
+                    y: y.round(),
+                    open: true,
+                    opens_in_s: None,
+                    progress: rules.progress,
+                    capturers: rules.capturers,
+                    contested: rules.blocked.contains(&true) && rules.capturers.iter().all(|&n| n > 0),
+                    heroes: rules.heroes.clone(),
+                    closes_in_s: until(rules.give_up),
+                })
+            }
+            (None, Some(at)) => {
+                let [x, y] = rules.location.unwrap_or([at.0, at.1]);
+                Some(Rift {
+                    x: x.round(),
+                    y: y.round(),
+                    open: false,
+                    opens_in_s: rift_spawned_at.and_then(|t| until(t + RIFT_OPENS_AFTER_S)),
+                    progress: [0.0; 2],
+                    capturers: [0; 2],
+                    contested: false,
+                    heroes: [Vec::new(), Vec::new()],
+                    closes_in_s: None,
+                })
+            }
             (None, None) => None,
         };
         let captured_now = (rules.scoring_time > 0.0 && rules.scoring_time != self.previous_scoring_time)
@@ -529,6 +728,7 @@ impl Sampler {
             self.pending.extend(urn_events(time_s, self.previous_urn.as_ref(), urn.as_ref(), team_of_player));
             self.pending.extend(rift_events(time_s, self.previous_rift.as_ref(), rift.as_ref(), captured_now, self.rift_captured));
         }
+        let (camps, midboss_respawn_in_s) = camps_at(&self.camp_timers, now);
         self.rift_captured = rift.is_some() && (self.rift_captured || captured_now.is_some());
         self.previous_scoring_time = self.rift_rules.scoring_time;
         self.previous_urn = urn.clone();
@@ -560,6 +760,10 @@ impl Sampler {
             objectives,
             urn,
             rift,
+            camps,
+            midboss_respawn_in_s,
+            sinners,
+            powerups,
             events: std::mem::take(&mut self.pending),
         });
         self.primed = true;
@@ -590,6 +794,16 @@ impl Visitor for Sampler {
                 let old = self.masks.unwrap_or([0, 0]);
                 self.masks = Some([msg.objective_mask_team0.unwrap_or(old[0]), msg.objective_mask_team1.unwrap_or(old[1])]);
             }
+            MSG_BOSS_KILLED => {
+                let msg = CCitadelUserMsgBossKilled::decode(data)?;
+                if msg.objective_team == Some(NEUTRAL_TEAM) {
+                    let time_s = self.clock.game_time().unwrap_or(0.0);
+                    let killer = (msg.entity_killer != NO_HANDLE).then(|| ehandle_to_index(msg.entity_killer));
+                    let team = killer.and_then(|i| ctx.entities()?.get(&i).and_then(team));
+                    let killer = killer.and_then(|i| self.account_of_pawn(ctx, i));
+                    self.pending.push(Event::MidbossKilled { time_s, team, killer });
+                }
+            }
             MSG_HERO_KILLED => {
                 let msg = CCitadelUserMsgHeroKilled::decode(data)?;
                 let time_s = self.clock.game_time().unwrap_or(0.0);
@@ -619,6 +833,7 @@ impl Visitor for Sampler {
             self.winning_team = int(e, key!("m_pGameRules", "m_iWinningTeam")).and_then(team_of);
             let rift = &mut self.rift_rules;
             rift.give_up = e.get_value(&key!("m_pGameRules", "m_timeKothGiveUp")).unwrap_or(0.0);
+            rift.location = e.get_value(&key!("m_pGameRules", "m_vKothCashInCurrentLocation")).and_then(valid_location);
             rift.scoring_time = e.get_value(&key!("m_pGameRules", "m_timeKothScoring")).unwrap_or(0.0);
             rift.scoring_team = int(e, key!("m_pGameRules", "m_nKothScoringTeam")).and_then(team_of);
             let states = key!("m_pGameRules", "m_vecTeamKothStates");
@@ -626,7 +841,10 @@ impl Visitor for Sampler {
                 let el = element(states, team);
                 rift.progress[team] = e.get_value::<f32>(&fxhash::add_u64_to_hash(el, CAPTURE_PROGRESS)).unwrap_or(0.0).clamp(0.0, 1.0);
                 rift.capturers[team] = int32(e, fxhash::add_u64_to_hash(el, CAPTURER_COUNT)).unwrap_or(0);
+                rift.blocked[team] = e.get_value(&fxhash::add_u64_to_hash(el, IS_BLOCKED)).unwrap_or(false);
+                rift.heroes[team] = array_u32(e, fxhash::add_u64_to_hash(el, PARTICIPANTS), 6);
             }
+            self.camp_timers = camp_timers(e);
         }
         Ok(())
     }
@@ -683,6 +901,8 @@ pub async fn follow(
         masks: None,
         winning_team: None,
         rift_rules: RiftRules::default(),
+        camp_timers: Vec::new(),
+        urn_value: None,
         previous: HashMap::new(),
         previous_abilities: HashMap::new(),
         previous_objectives: BTreeMap::new(),
@@ -773,8 +993,8 @@ mod tests {
 
     #[test]
     fn urn_spawn_pickup_drop_and_delivery() {
-        let ground = Urn { x: 1.0, y: 2.0, carrier: None, delivery: None };
-        let carried = |a| Urn { x: 1.0, y: 2.0, carrier: Some(a), delivery: Some([6304.0, -96.0]) };
+        let ground = Urn { x: 1.0, y: 2.0, carrier: None, delivery: None, value: Some(950) };
+        let carried = |a| Urn { x: 1.0, y: 2.0, carrier: Some(a), delivery: Some([6304.0, -96.0]), value: Some(950) };
         let team = |a: u32| Some(if a == 1 { 0 } else { 1 });
         assert_eq!(names(&urn_events(0.0, None, Some(&ground), team)), ["urn_spawned"]);
         assert_eq!(names(&urn_events(0.0, Some(&ground), Some(&carried(1)), team)), ["urn_picked_up"]);
@@ -787,8 +1007,18 @@ mod tests {
 
     #[test]
     fn rift_appears_opens_and_is_captured_or_closes() {
-        let appearing = Rift { x: -7648.0, y: 0.0, open: false, progress: [0.0; 2], capturers: [0; 2], closes_in_s: None };
-        let open = Rift { open: true, closes_in_s: Some(60.0), ..appearing.clone() };
+        let appearing = Rift {
+            x: -7648.0,
+            y: 0.0,
+            open: false,
+            opens_in_s: Some(70.0),
+            progress: [0.0; 2],
+            capturers: [0; 2],
+            contested: false,
+            heroes: [Vec::new(), Vec::new()],
+            closes_in_s: None,
+        };
+        let open = Rift { open: true, opens_in_s: None, closes_in_s: Some(60.0), ..appearing.clone() };
         assert_eq!(names(&rift_events(0.0, None, Some(&appearing), None, false)), ["rift_appeared"]);
         assert_eq!(names(&rift_events(0.0, Some(&appearing), Some(&open), None, false)), ["rift_opened"]);
         // Captured while the point still stands, then removed: one capture, no close.
@@ -798,6 +1028,40 @@ mod tests {
         assert_eq!(names(&rift_events(0.0, Some(&open), None, Some(1), false)), ["rift_captured"]);
         // Nobody took it in time.
         assert_eq!(names(&rift_events(0.0, Some(&open), None, None, false)), ["rift_closed"]);
+    }
+
+    #[test]
+    fn ability_states_follow_the_upgrade_bits() {
+        let states = ability_states(&[(11, 0), (22, 0x10000), (33, 0xF0000)]);
+        assert_eq!(
+            states,
+            [
+                Ability { id: 11, unlocked: false, tier: 0 },
+                Ability { id: 22, unlocked: true, tier: 0 },
+                Ability { id: 33, unlocked: true, tier: 3 },
+            ]
+        );
+    }
+
+    #[test]
+    fn camp_timers_become_camps_and_the_midboss_respawn() {
+        let timers = [
+            CampTimer { id: 0, x: 3248.0, y: -1888.0, next_spawn: -1.0, midboss: false }, // up
+            CampTimer { id: 1, x: -1.5, y: -0.8, next_spawn: 1420.0, midboss: true },
+            CampTimer { id: 2, x: -3520.0, y: -4384.0, next_spawn: 1100.4, midboss: false }, // down
+            CampTimer { id: 3, x: 1.0, y: 1.0, next_spawn: 990.0, midboss: false }, // due: about to be back
+        ];
+        let (camps, midboss) = camps_at(&timers, 1000.0);
+        assert_eq!(camps.iter().map(|c| (c.id, c.respawn_in_s)).collect::<Vec<_>>(), [(0, None), (2, Some(100.0)), (3, Some(0.0))]);
+        assert_eq!(midboss, Some(420.0));
+        assert_eq!(camps_at(&[CampTimer { midboss: true, next_spawn: -1.0, ..timers[1] }], 0.0).1, None);
+    }
+
+    #[test]
+    fn rift_locations_ignore_valves_placeholders() {
+        assert_eq!(valid_location([-7648.0, 0.0, 420.0]), Some([-7648.0, 0.0]));
+        assert_eq!(valid_location([f32::MAX, f32::MAX, f32::MAX]), None); // after a capture
+        assert_eq!(valid_location([0.0, 0.0, 0.0]), None); // before the first rift
     }
 
     #[test]

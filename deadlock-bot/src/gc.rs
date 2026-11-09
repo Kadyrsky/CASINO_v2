@@ -8,6 +8,7 @@ use prost::Message;
 use steam_vent::proto::MsgKind;
 use steam_vent::proto::enums_clientserver::EMsg;
 use steam_vent::proto::steammessages_clientserver::CMsgClientGamesPlayed;
+use steam_vent::proto::steammessages_clientserver_login::CMsgClientLoggedOff;
 use steam_vent::{Connection, ConnectionTrait, GameCoordinator, UntypedMessage};
 use tokio::time::{sleep, timeout};
 use valveprotos::deadlock::EgcCitadelClientMessages;
@@ -28,6 +29,9 @@ impl GcSession {
         let conn = crate::auth::connect().await?;
         log::debug!("logged in to Steam; starting the game coordinator handshake");
 
+        // If Steam logs the account off during the handshake, it says why.
+        let logged_off = conn.one::<CMsgClientLoggedOff>();
+
         // Reports Deadlock as running (the GC only talks to accounts that are "in" the game),
         // then sends the standard GC hello every 5 seconds until the GC answers with a welcome.
         let gc = match timeout(
@@ -38,7 +42,11 @@ impl GcSession {
         {
             Ok(Ok(gc)) => gc,
             Ok(Err(e)) => {
+                let why = timeout(Duration::from_millis(500), logged_off).await;
                 stop_playing(&conn).await;
+                if let Ok(Ok(off)) = why {
+                    return Err(e).context(logged_off_reason(off.eresult()));
+                }
                 return Err(e).context("the game coordinator handshake failed");
             }
             Err(_) => {
@@ -82,6 +90,22 @@ impl GcSession {
     /// out elsewhere too, and dropping the connection ends this session anyway.
     pub async fn close(self) {
         stop_playing(&self.conn).await;
+    }
+}
+
+/// What Steam's reason for logging the bot off means (EResult codes from Valve's SDK).
+fn logged_off_reason(eresult: i32) -> String {
+    let hint = match eresult {
+        6 => "the account logged in somewhere else",
+        34 => "another session with this account replaced this one",
+        48 => "Steam is busy; try again later",
+        84 => "too many logins from this address; wait a while",
+        _ => "",
+    };
+    if hint.is_empty() {
+        format!("Steam logged the bot off during the game coordinator handshake (EResult {eresult})")
+    } else {
+        format!("Steam logged the bot off during the game coordinator handshake (EResult {eresult}: {hint})")
     }
 }
 

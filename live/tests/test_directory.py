@@ -98,7 +98,11 @@ def test_assets_keep_only_what_the_site_draws() -> None:
              {"id": 6, "type": "ability", "ability_type": "signature", "name": "Fireball", "image": "f.png", "image_webp": "f.webp"},
              {"id": 7, "type": "ability", "ability_type": "innate", "name": "Jump"}]
     world = {"radius": 10752, "images": {"minimap": "map.png"},
-             "zipline_paths": [{"origin": [10, 20, 0], "color": "#29b1cc", "P0_points": [[0, 0, 0], [1, 2, 3]]}]}
+             "zipline_paths": [{"origin": [10, 20, 0], "color": "#29b1cc", "P0_points": [[0, 0, 0], [1, 2, 3]]}],
+             "neutral_camps": [{"name": "dock_camp", "kind": "strong", "position": [-9248.0, 0.0, 288.9], "icon": "large.png"},
+                               {"name": "drug_store_camp", "kind": "vault", "position": [2208.0, -960.0, 400.0], "icon": "vault.png"}],
+             "entities": {"soul_urn_spawns": [{"position": [-6584.0, 0.0, 144.0]}], "soul_urn_pads": [{"position": [6304.0, -96.0, 192.0]}],
+                          "unstable_rifts": [{"position": [-7648.0, 0.0, 420.0]}, {"position": [7648.0, 0.0, 420.0]}]}}
     a = compact_assets(heroes, ranks, items, world)
     assert a["heroes"]["1"] == {"name": "Infernus", "icon": "i.png", "minimap": "m.webp", "color": [1, 2, 3]}
     assert a["ranks"]["10"]["image"] == "l.webp"
@@ -106,3 +110,8 @@ def test_assets_keep_only_what_the_site_draws() -> None:
     assert a["abilities"] == {"6": {"name": "Fireball", "image": "f.webp"}}  # hero abilities only, not Jump
     assert a["map"]["lanes"][0]["points"] == [[10, 20], [11, 22]]
     assert a["map"]["radius"] == 10752
+    assert a["map"]["camps"] == [{"kind": "strong", "x": -9248.0, "y": 0.0}, {"kind": "vault", "x": 2208.0, "y": -960.0}]
+    assert a["map"]["urn_spawns"] == [[-6584.0, 0.0]] and a["map"]["urn_pads"] == [[6304.0, -96.0]]
+    assert a["map"]["rift_spots"] == [[-7648.0, 0.0], [7648.0, 0.0]]
+    # Older map data without camps or entities still works.
+    assert compact_assets([], [], [], {"radius": 1})["map"]["camps"] == []
