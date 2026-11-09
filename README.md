@@ -326,12 +326,14 @@ Germany, Hungary, Montenegro, Slovenia, Portugal, Belgium, Ireland, Bulgaria, Gr
 # Java: 72 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules,
 # deadlock-api -> Steam bot fallback, Ethereum signatures, deposit-log parsing, payout encoding and signing)
 cd core && mvn test
-# + 40 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
+# + 44 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
 cd core && mvn -Pit test
+# Coverage (JaCoCo) is written by both commands: core/target/site/jacoco/index.html
 
 # Python: 36 tests, mypy --strict
 cd live && python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"   # bin/ on Linux/macOS
 .venv/Scripts/python -m pytest && .venv/Scripts/python -m mypy naebka_live tests
+.venv/Scripts/python -m pytest --cov=naebka_live --cov-report=html   # coverage: live/htmlcov/index.html
 
 # Frontend (no local Node needed)
 docker run --rm -v "$PWD/frontend:/app" -w /app node:22-alpine sh -c "npm install && npx tsc --noEmit && npx vp lint src && npm run build"

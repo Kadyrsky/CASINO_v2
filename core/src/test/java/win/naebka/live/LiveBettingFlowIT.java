@@ -17,6 +17,9 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import win.naebka.IntegrationTestBase;
 import win.naebka.common.ErrorCode;
 import win.naebka.common.Exceptions;
+import win.naebka.common.TxRetry;
+import win.naebka.wallet.LedgerSource;
+import win.naebka.wallet.TxType;
 import win.naebka.wallet.WalletService;
 
 /** End-to-end simulated match flows: place → suspend → reprice → settle (Definition of Done). */
@@ -42,6 +45,8 @@ class LiveBettingFlowIT extends IntegrationTestBase {
     WalletService wallets;
     @Autowired
     JdbcClient jdbc;
+    @Autowired
+    TxRetry tx;
 
     UUID selection(UUID matchId, String key) {
         return jdbc.sql("""
@@ -187,5 +192,28 @@ class LiveBettingFlowIT extends IntegrationTestBase {
                 .isInstanceOfSatisfying(Exceptions.DomainException.class, e -> assertThat(e.code()).isEqualTo(ErrorCode.STAKE_ABOVE_MAX));
         assertThatThrownBy(() -> bets.place(user, selection(matchId, "side1"), new BigDecimal("4000"), null, "s3"))
                 .isInstanceOf(Exceptions.InsufficientBalanceException.class);
+    }
+
+    /** TC-04, boundary value analysis: min 1 and max 5000 tokens are accepted, one cent outside is not. */
+    @Test
+    void stakeBoundaries() {
+        MatchSimulator sim = new MatchSimulator(matches);
+        UUID matchId = sim.discover();
+        sim.price(null, "1.90", "1.90");
+        UUID user = newUser();
+        UUID wallet = wallets.walletIdOf(user);
+        tx.inTransaction(() -> wallets.credit(wallet, 10_000_00, TxType.DEPOSIT, LedgerSource.NONE, "stake-topup:" + user));
+        UUID side1 = selection(matchId, "side1");
+
+        assertThatThrownBy(() -> bets.place(user, side1, new BigDecimal("0.99"), null, UUID.randomUUID().toString()))
+                .isInstanceOfSatisfying(Exceptions.DomainException.class, e -> assertThat(e.code()).isEqualTo(ErrorCode.STAKE_BELOW_MIN));
+        assertThat(bets.place(user, side1, new BigDecimal("1.00"), null, UUID.randomUUID().toString()).status())
+                .isEqualTo("PENDING");
+        assertThat(bets.place(user, side1, new BigDecimal("5000.00"), null, UUID.randomUUID().toString()).status())
+                .isEqualTo("PENDING");
+        assertThatThrownBy(() -> bets.place(user, side1, new BigDecimal("5000.01"), null, UUID.randomUUID().toString()))
+                .isInstanceOfSatisfying(Exceptions.DomainException.class, e -> assertThat(e.code()).isEqualTo(ErrorCode.STAKE_ABOVE_MAX));
+        // 10000 + 1000 signup bonus - 1 - 5000
+        assertThat(wallets.walletOf(user).balance()).isEqualTo(5_999_00);
     }
 }

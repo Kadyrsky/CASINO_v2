@@ -14,3 +14,5 @@
 # Hardhat build output (contracts/)
 contracts/cache/
 contracts/artifacts/
+.coverage
+**/htmlcov/
