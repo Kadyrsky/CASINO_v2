@@ -15,17 +15,19 @@ public final class SlotMachine {
 
     private static final Map<String, Symbol> SYMBOLS = new LinkedHashMap<>();
 
+    // Deadlock-themed: cheap shop items are the low symbols, map objectives the high ones. The ids are the original
+    // ones, so rounds played before the theme still read and verify the same.
     static {
-        regular("CHERRY", "Cherry", 4, 10, 40);
-        regular("LEMON", "Lemon", 4, 10, 40);
-        regular("BELL", "Bell", 8, 25, 80);
-        regular("CLOVER", "Clover", 10, 30, 100);
-        regular("GEM", "Soul Gem", 20, 75, 250);
-        regular("SEVEN", "Seven", 40, 150, 600);
-        SYMBOLS.put("WILD", new Symbol("WILD", "Patron", SymbolType.WILD, Map.of(3, 50, 4, 250, 5, 2000)));
-        SYMBOLS.put("MULT", new Symbol("MULT", "Patron x2", SymbolType.MULTIPLIER, Map.of()));
-        SYMBOLS.put("SCATTER", new Symbol("SCATTER", "Urn", SymbolType.SCATTER, Map.of()));
-        SYMBOLS.put("BONUS", new Symbol("BONUS", "Vault", SymbolType.BONUS, Map.of()));
+        regular("CHERRY", "Extended Magazine", 4, 10, 40);
+        regular("LEMON", "Extra Health", 4, 10, 40);
+        regular("BELL", "Extra Spirit", 8, 25, 80);
+        regular("CLOVER", "Guardian", 10, 30, 100);
+        regular("GEM", "Walker", 20, 75, 250);
+        regular("SEVEN", "Rejuvenator", 40, 150, 600);
+        SYMBOLS.put("WILD", new Symbol("WILD", "Hidden King", SymbolType.WILD, Map.of(3, 50, 4, 250, 5, 2000)));
+        SYMBOLS.put("MULT", new Symbol("MULT", "Archmother x2", SymbolType.MULTIPLIER, Map.of()));
+        SYMBOLS.put("SCATTER", new Symbol("SCATTER", "Soul Urn", SymbolType.SCATTER, Map.of()));
+        SYMBOLS.put("BONUS", new Symbol("BONUS", "Unstable Rift", SymbolType.BONUS, Map.of()));
     }
 
     private static void regular(String id, String name, int three, int four, int five) {

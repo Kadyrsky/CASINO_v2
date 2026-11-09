@@ -4,41 +4,37 @@ import { createMemo, createSignal, For, Index, onMount, Show } from 'solid-js';
 import { ApiError, get, post } from '../api/client';
 import type { BonusPick, Fairness, Page, SlotGame, SlotRound, SlotState, SpinResult } from '../api/types';
 import { toast } from '../components/toast';
+import { LINE_SYMBOLS, Paytable, SYMBOL_ART, SymbolIcon } from '../components/slotArt';
 import { Badge, Button, Card, Empty, Modal, PageHeader } from '../components/ui';
 import { auth } from '../lib/auth';
 import { ago, fiat, humanize, tokens } from '../lib/format';
 import { wallet } from '../lib/wallet';
 import { useTopic } from '../lib/ws';
 
-const GLYPH: Record<string, { icon: string; tone: string }> = {
-  CHERRY: { icon: '🍒', tone: 'from-rose-500/20' },
-  LEMON: { icon: '🍋', tone: 'from-yellow-400/20' },
-  BELL: { icon: '🔔', tone: 'from-amber-400/20' },
-  CLOVER: { icon: '🍀', tone: 'from-emerald-400/20' },
-  GEM: { icon: '💎', tone: 'from-sky-400/25' },
-  SEVEN: { icon: '7', tone: 'from-red-500/30' },
-  WILD: { icon: '👑', tone: 'from-gold-400/40' },
-  MULT: { icon: '×2', tone: 'from-fuchsia-500/35' },
-  SCATTER: { icon: '⚱️', tone: 'from-violet-500/30' },
-  BONUS: { icon: '🗝️', tone: 'from-teal-400/30' },
-};
-const ALL = Object.keys(GLYPH);
 const BET_STEPS = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10];
 
 function SlotSymbol(props: { id: string; win?: boolean; spinning?: boolean; delay?: number }) {
-  const g = () => GLYPH[props.id] ?? { icon: '?', tone: '' };
+  const art = () => SYMBOL_ART[props.id];
   return (
     <div
-      class={`relative grid aspect-square place-items-center overflow-hidden rounded-xl border bg-gradient-to-b to-ink-900 text-2xl transition-all duration-300 sm:text-4xl ${g().tone} ${
+      class={`relative grid aspect-square place-items-center overflow-hidden rounded-xl border bg-gradient-to-b to-ink-900 transition-all duration-300 ${art()?.tone ?? ''} ${
         props.win ? 'scale-[1.04] border-gold-400 shadow-[0_0_24px_-4px_rgb(226_164_67/0.8)]' : 'border-ink-700'
       }`}
+      title={props.spinning ? undefined : art()?.tag}
     >
-      <span
-        class={`select-none ${props.spinning ? 'animate-reel opacity-70' : 'animate-pop'} ${props.id === 'SEVEN' ? 'font-black text-loss' : ''} ${props.id === 'MULT' ? 'text-xl font-black text-fuchsia-300 sm:text-2xl' : ''}`}
+      <div
+        class={`grid size-full place-items-center select-none ${props.spinning ? 'animate-reel opacity-70' : 'animate-pop'} ${art()?.card ? 'p-[9%]' : 'p-[14%]'}`}
         style={{ 'animation-delay': `${props.delay ?? 0}ms` }}
       >
-        {g().icon}
-      </span>
+        <SymbolIcon id={props.id} class={`size-full ${art()?.card ? 'rounded-lg' : ''}`} />
+      </div>
+      <Show when={!props.spinning && art()?.tag}>
+        {(tag) => (
+          <span class="absolute inset-x-0 bottom-0 bg-ink-950/75 py-px text-center text-[8px] font-black uppercase tracking-wider text-gold-300 sm:text-[10px]">
+            {tag()}
+          </span>
+        )}
+      </Show>
     </div>
   );
 }
@@ -62,7 +58,7 @@ export default function Slots() {
   });
 
   onMount(() => {
-    const rnd = () => ALL[Math.floor(Math.random() * 6)]!;
+    const rnd = () => LINE_SYMBOLS[Math.floor(Math.random() * LINE_SYMBOLS.length)]!;
     setFakeGrid(Array.from({ length: 5 }, () => [rnd(), rnd(), rnd()]));
   });
 
@@ -70,6 +66,8 @@ export default function Slots() {
   const freeSpins = () => state.data?.freeSpinsRemaining ?? 0;
   const betPerLine = () => BET_STEPS[betIdx()]!;
   const totalBet = () => betPerLine() * (game.data?.paylines.length ?? 10);
+  /** Free spins play at the bet that won them, so the paytable shows that one. */
+  const paytableBet = () => (slotState() === 'FREE_SPINNING' ? (state.data?.freeSpinBetPerLine ?? betPerLine()) : betPerLine());
   const grid = () => result()?.grid ?? state.data?.lastSpin?.grid ?? fakeGrid();
   const winCells = createMemo(() => {
     const cells = new Set<string>();
@@ -93,7 +91,7 @@ export default function Slots() {
       wallet.set(r.balance);
       if (r.jackpotWin > 0) toast.success(`JACKPOT! ${tokens(r.jackpotWin)} NTK`);
       else if (r.freeSpinsAwarded > 0) toast.success(`${r.freeSpinsAwarded} free spins!`);
-      else if (r.isBonusGameTriggered) toast.success('Bonus game! Pick 3 vaults.');
+      else if (r.isBonusGameTriggered) toast.success('Rift bonus! Open 3 rifts.');
       setBonusBoard({});
       setRevealed(null);
       void queryClient.invalidateQueries({ queryKey: ['slot-state'] });
@@ -133,7 +131,7 @@ export default function Slots() {
     <div>
       <PageHeader
         title="Soul Reels"
-        subtitle="5 reels · 10 lines · wilds, ×2 multipliers, free spins and the vault bonus. Provably fair."
+        subtitle="Deadlock slots: 5 reels · 10 lines · Patron wilds, Soul Urn free spins and the rift bonus. Provably fair."
         actions={
           <div class="rounded-xl border border-gold-500/30 bg-gradient-to-r from-gold-500/15 to-transparent px-4 py-2">
             <p class="text-[11px] font-bold uppercase tracking-widest text-gold-300">Progressive jackpot</p>
@@ -147,7 +145,7 @@ export default function Slots() {
           <Show when={slotState() === 'BONUS_GAME' || revealed()}>
             <div class="mb-4 rounded-xl border border-teal-400/30 bg-teal-400/5 p-4">
               <p class="mb-3 text-center font-semibold text-teal-300">
-                Vault bonus — {revealed() ? 'complete!' : `pick ${state.data?.bonus?.remainingPicks ?? 3} more`} · won {tokens(Object.values(opened()).reduce((a, b) => a + b, 0))}
+                Rift bonus — {revealed() ? 'complete!' : `open ${state.data?.bonus?.remainingPicks ?? 3} more`} · won {tokens(Object.values(opened()).reduce((a, b) => a + b, 0))}
               </p>
               <div class="grid grid-cols-4 gap-2 sm:grid-cols-6">
                 <Index each={Array.from({ length: 12 })}>
@@ -162,7 +160,7 @@ export default function Slots() {
                           mine() ? 'border-teal-300 bg-teal-400/20 text-teal-200' : value() != null ? 'border-ink-700 bg-ink-850 text-ink-500' : 'border-ink-600 bg-ink-800 text-2xl hover:-translate-y-0.5 hover:border-teal-300'
                         }`}
                       >
-                        {value() != null ? tokens(value()) : '🗝️'}
+                        {value() != null ? tokens(value()) : <SymbolIcon id="BONUS" class="size-3/5" />}
                       </button>
                     );
                   }}
@@ -192,12 +190,28 @@ export default function Slots() {
             >
               {(r) => (
                 <Show when={r().totalWin > 0} fallback={<p class="text-sm text-ink-400">No win this time.</p>}>
-                  <div class="animate-pop text-center">
+                  <div class="animate-pop flex flex-col items-center gap-1.5 text-center">
                     <p class="tabular text-3xl font-black text-win">+{tokens(r().totalWin)}</p>
-                    <p class="text-xs text-ink-400">
-                      ≈ {fiat(r().totalWin)} · {r().winningLines.length} line{r().winningLines.length === 1 ? '' : 's'}
-                      {r().scatterCount >= 3 ? ` · ${r().scatterCount} scatters` : ''}
-                    </p>
+                    <p class="text-xs text-ink-400">≈ {fiat(r().totalWin)}</p>
+                    <div class="flex flex-wrap justify-center gap-1.5">
+                      <For each={r().winningLines}>
+                        {(l) => (
+                          <span class="flex items-center gap-1.5 rounded-full bg-ink-850 py-0.5 pl-1 pr-2.5 text-xs ring-1 ring-ink-700">
+                            <SymbolIcon id={l.symbol} class="size-5" />
+                            <span class="text-ink-300">
+                              Line {l.paylineId}: {l.count} × {game.data?.symbols[l.symbol]?.name ?? l.symbol}
+                            </span>
+                            <span class="tabular font-semibold text-win">+{tokens(l.win)}</span>
+                          </span>
+                        )}
+                      </For>
+                      <Show when={r().scatterCount >= 3}>
+                        <span class="flex items-center gap-1.5 rounded-full bg-ink-850 py-0.5 pl-1 pr-2.5 text-xs ring-1 ring-ink-700">
+                          <SymbolIcon id="SCATTER" class="size-5" />
+                          <span class="text-ink-300">{r().scatterCount} Soul Urns</span>
+                        </span>
+                      </Show>
+                    </div>
                   </div>
                 </Show>
               )}
@@ -224,21 +238,13 @@ export default function Slots() {
         </Card>
 
         <aside class="flex flex-col gap-6">
-          <Card title="Paytable" actions={<span class="text-[11px] text-ink-400">× line bet</span>}>
-            <ul class="divide-y divide-ink-800 text-sm">
-              <For each={Object.entries(game.data?.symbols ?? {}).filter(([, s]) => Object.keys(s.pays).length)}>
-                {([id, s]) => (
-                  <li class="flex items-center justify-between px-4 py-1.5">
-                    <span class="flex items-center gap-2"><span class="w-6 text-center text-lg">{GLYPH[id]?.icon}</span>{s.name}</span>
-                    <span class="tabular text-xs text-ink-300">{Object.entries(s.pays).map(([n, x]) => `${n}:${x}`).join('  ')}</span>
-                  </li>
-                )}
-              </For>
-            </ul>
-            <div class="space-y-1 border-t border-ink-800 px-4 py-3 text-xs text-ink-400">
-              <p>👑 Wild substitutes. ×2 is a wild that doubles its line. Five wilds on a line win the jackpot.</p>
-              <p>⚱️ 3+ anywhere: 10 free spins and 2/10/50× total bet. 🗝️ on reels 1, 3 and 5: vault bonus.</p>
-            </div>
+          <Card title="Paytable">
+            <Paytable
+              game={game.data}
+              betPerLine={paytableBet()}
+              totalBet={paytableBet() * (game.data?.paylines.length ?? 10)}
+              wonLines={new Set((result()?.winningLines ?? []).map((l) => l.paylineId ?? 0))}
+            />
           </Card>
           <Show when={auth.user()}>
             <Card title="Provably fair" actions={<Button size="sm" variant="ghost" onClick={() => setFairOpen(true)}>Seeds</Button>}>
