@@ -6,6 +6,7 @@ import { PlayingCard } from '../components/PlayingCard';
 import { toast } from '../components/toast';
 import { Badge, Button, Field, Input, Modal, Spinner } from '../components/ui';
 import { auth } from '../lib/auth';
+import { ab } from '../lib/experiments';
 import { chips, humanize, tokens } from '../lib/format';
 import { wallet } from '../lib/wallet';
 import { hub, useHubMessages, useTopic } from '../lib/ws';
@@ -100,6 +101,7 @@ export default function PokerTablePage() {
       const priv = await post<PokerPrivateState>(`/api/poker/tables/${params.id}/sit`, { seatNo: seat, buyInTokens: Number(buyIn()) });
       setMe(priv);
       setSitSeat(null);
+      ab.track('poker_sit');
       void wallet.refresh();
       toast.success('You are seated. The next hand starts when two players are ready.');
     } catch (e) {

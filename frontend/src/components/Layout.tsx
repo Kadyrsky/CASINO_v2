@@ -1,10 +1,14 @@
 import { A, useNavigate, type RouteSectionProps } from '@solidjs/router';
-import { createSignal, For, Show } from 'solid-js';
+import { createEffect, createSignal, For, onMount, Show } from 'solid-js';
 import { auth } from '../lib/auth';
 import { eth, shortAddress } from '../lib/eth';
+import { ab } from '../lib/experiments';
 import { appConfig, fiat, tokens } from '../lib/format';
 import { wallet } from '../lib/wallet';
 import { hub } from '../lib/ws';
+import { customize, feedbackPanel } from '../lib/panels';
+import { CustomizeButton } from './Appearance';
+import { FeedbackDock } from './Feedback';
 import { Toaster } from './toast';
 
 const nav = [
@@ -18,6 +22,17 @@ const nav = [
 export default function Layout(props: RouteSectionProps) {
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = createSignal(false);
+  const openCustomize = () => {
+    setMenuOpen(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    customize.show();
+  };
+
+  // A/B: the theme is on every page; the sign-up button only shows to logged-out visitors.
+  onMount(() => ab.expose('theme'));
+  createEffect(() => {
+    if (!auth.user()) ab.expose('join_cta');
+  });
 
   const logout = async () => {
     setMenuOpen(false);
@@ -27,13 +42,15 @@ export default function Layout(props: RouteSectionProps) {
 
   return (
     <div class="flex min-h-screen flex-col">
+      {/* The theme's Patron drifting in the background (styles.css; only in the Patron themes). */}
+      <div class="patron-bg" aria-hidden="true" />
       <header class="sticky top-0 z-40 border-b border-ink-800 bg-ink-950/85 backdrop-blur-md">
         <div class="mx-auto flex h-16 max-w-7xl items-center gap-4 px-4">
           <A href="/" class="flex items-center gap-2" aria-label="Naebka home">
-            <span class="grid size-8 place-items-center rounded-lg bg-gradient-to-br from-gold-300 to-gold-600 text-sm font-black text-ink-950 shadow-[0_0_20px_-4px_rgb(226_164_67/0.7)]">
+            <span class="grid size-8 place-items-center rounded-lg bg-gradient-to-br from-gold-300 to-gold-600 text-sm font-black text-ink-950 shadow-[0_0_20px_-4px_color-mix(in_oklab,var(--color-gold-500)_70%,transparent)]">
               N
             </span>
-            <span class="hidden text-lg font-extrabold tracking-tight sm:inline">naebka</span>
+            <span class="dl-type hidden text-lg font-extrabold tracking-tight sm:inline">naebka</span>
           </A>
 
           <nav class="no-scrollbar -mx-1 flex flex-1 gap-1 overflow-x-auto px-1">
@@ -42,7 +59,7 @@ export default function Layout(props: RouteSectionProps) {
                 <A
                   href={n.href}
                   end={n.end}
-                  class="flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-ink-400 transition-colors hover:bg-ink-850 hover:text-ink-100"
+                  class="dl-type flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-ink-400 transition-colors hover:bg-ink-850 hover:text-ink-100"
                   activeClass="!bg-ink-800 !text-ink-100"
                 >
                   <span class="text-xs opacity-70">{n.icon}</span>
@@ -57,15 +74,20 @@ export default function Layout(props: RouteSectionProps) {
             </Show>
           </nav>
 
+          <CustomizeButton />
+
           <Show
             when={auth.user()}
             fallback={
               <div class="flex shrink-0 gap-2">
-                <A href="/login" class="rounded-lg px-3 py-2 text-sm font-semibold text-ink-200 hover:bg-ink-850">
+                <A href="/login" class="dl-type rounded-lg px-3 py-2 text-sm font-semibold text-ink-200 hover:bg-ink-850">
                   Log in
                 </A>
-                <A href="/register" class="rounded-lg bg-gold-500 px-3 py-2 text-sm font-semibold text-ink-950 hover:bg-gold-400">
-                  Join
+                <A href="/register" class="btn-dl dl-type rounded-lg bg-gold-500 px-3 py-2 text-sm font-semibold text-ink-950 hover:bg-gold-400">
+                  <Show when={ab.variant('join_cta') === 'bonus'} fallback="Join">
+                    <span class="sm:hidden">1,000 free NTK</span>
+                    <span class="hidden sm:inline">Get 1,000 free NTK</span>
+                  </Show>
                 </A>
               </div>
             }
@@ -115,6 +137,9 @@ export default function Layout(props: RouteSectionProps) {
                     <A href="/bets" class="block rounded-lg px-3 py-2 text-sm hover:bg-ink-800" onClick={() => setMenuOpen(false)}>
                       My bets
                     </A>
+                    <button class="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-ink-800" onClick={openCustomize}>
+                      Customize the look
+                    </button>
                     <button class="block w-full rounded-lg px-3 py-2 text-left text-sm text-loss hover:bg-ink-800" onClick={logout}>
                       Log out
                     </button>
@@ -134,7 +159,7 @@ export default function Layout(props: RouteSectionProps) {
 
       {/* Responsible-gambling information is reachable from every page (Risk #4). */}
       <footer class="border-t border-ink-800 bg-ink-950/70">
-        <div class="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-4 text-xs text-ink-400">
+        <div class="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 pb-20 pt-4 text-xs text-ink-400">
           <div class="flex items-center gap-3">
             <span class="grid size-7 place-items-center rounded-full border-2 border-loss text-[10px] font-black text-loss">18+</span>
             <span>
@@ -144,13 +169,16 @@ export default function Layout(props: RouteSectionProps) {
               </Show>
             </span>
           </div>
-          <div class="flex gap-4">
+          <div class="flex flex-wrap gap-4">
+            <button class="hover:text-ink-200" onClick={openCustomize}>Customize the look</button>
+            <button class="hover:text-ink-200" onClick={feedbackPanel.show}>Feedback</button>
             <A href="/wallet#limits" class="hover:text-ink-200">Set limits</A>
             <A href="/wallet#self-exclusion" class="hover:text-ink-200">Self-exclusion</A>
             <a href="https://www.begambleaware.org" target="_blank" rel="noreferrer" class="hover:text-ink-200">Get help</a>
           </div>
         </div>
       </footer>
+      <FeedbackDock />
       <Toaster />
     </div>
   );

@@ -2,6 +2,7 @@ import { A, useNavigate } from '@solidjs/router';
 import { createSignal, For, Show } from 'solid-js';
 import { ApiError } from '../api/client';
 import { Button, Card, Field, Input, Select } from '../components/ui';
+import { ab } from '../lib/experiments';
 import { auth } from '../lib/auth';
 import { countryName, licensedCountries } from '../lib/format';
 
@@ -23,6 +24,7 @@ export default function Register() {
     setErrors({});
     try {
       await auth.register(form());
+      ab.track('registered');
       navigate('/', { replace: true });
     } catch (err) {
       if (err instanceof ApiError && err.extra.fields) setErrors(err.extra.fields as Record<string, string>);
