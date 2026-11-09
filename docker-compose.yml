@@ -1,4 +1,4 @@
-# Naebka — local / MVP deployment (System Architecture Design: "Docker Compose behind an Nginx reverse proxy").
+# Naebka — local / MVP deployment with Docker Compose. The core serves the frontend itself (no nginx container).
 # Start everything:  docker compose up --build
 # Open:              http://localhost:8080
 services:
@@ -23,9 +23,12 @@ services:
       interval: 5s
       retries: 20
 
-  # Transactional core: auth, wallet ledger, betting, settlement, slots, poker, WebSocket hub.
+  # Transactional core: auth, wallet ledger, betting, settlement, slots, poker, WebSocket hub, and the built
+  # SolidJS frontend (the image builds frontend/ too, so the build context is the repository root).
   core:
-    build: ./core
+    build:
+      context: .
+      dockerfile: core/Dockerfile
     restart: unless-stopped
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/naebka
@@ -60,7 +63,8 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
-    ports: ["8081:8081"]
+    # 8080: the site (frontend + /api + /ws); 8081: the same server, kept for Swagger and existing scripts.
+    ports: ["8080:8081", "8081:8081"]
 
   # Ingestion: polls the public Deadlock API and publishes normalized match events.
   watcher:
@@ -106,12 +110,6 @@ services:
       ODDS_MARGIN: ${ODDS_MARGIN:-0.06}
     depends_on:
       redis: { condition: service_healthy }
-
-  # SolidJS SPA served by nginx, which also reverse-proxies /api and /ws to the core.
-  web:
-    build: ./frontend
-    ports: ["8080:80"]
-    depends_on: [core]
 
 volumes:
   pgdata:
