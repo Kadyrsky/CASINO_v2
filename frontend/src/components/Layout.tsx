@@ -1,4 +1,4 @@
-import { A, useNavigate, type RouteSectionProps } from '@solidjs/router';
+import { A, useLocation, useNavigate, type RouteSectionProps } from '@solidjs/router';
 import { createEffect, createSignal, For, onMount, Show } from 'solid-js';
 import { auth } from '../lib/auth';
 import { eth, shortAddress } from '../lib/eth';
@@ -6,9 +6,13 @@ import { ab } from '../lib/experiments';
 import { appConfig, fiat, tokens } from '../lib/format';
 import { wallet } from '../lib/wallet';
 import { hub } from '../lib/ws';
-import { customize, feedbackPanel } from '../lib/panels';
+import { customize, feedbackPanel, tasteTest } from '../lib/panels';
+import { prompts } from '../lib/prompts';
 import { CustomizeButton } from './Appearance';
 import { FeedbackDock } from './Feedback';
+import { PulseCard } from './QuickRating';
+import { SoundButton } from './SoundControls';
+import { TasteTestDock } from './TasteTest';
 import { Toaster } from './toast';
 
 const nav = [
@@ -21,6 +25,7 @@ const nav = [
 
 export default function Layout(props: RouteSectionProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [menuOpen, setMenuOpen] = createSignal(false);
   const openCustomize = () => {
     setMenuOpen(false);
@@ -33,6 +38,8 @@ export default function Layout(props: RouteSectionProps) {
   createEffect(() => {
     if (!auth.user()) ab.expose('join_cta');
   });
+  // Prompts stay away from forms (prompts.ts).
+  createEffect(() => prompts.setPath(location.pathname));
 
   const logout = async () => {
     setMenuOpen(false);
@@ -74,7 +81,10 @@ export default function Layout(props: RouteSectionProps) {
             </Show>
           </nav>
 
-          <CustomizeButton />
+          <div class="flex shrink-0 items-center gap-2">
+            <SoundButton />
+            <CustomizeButton />
+          </div>
 
           <Show
             when={auth.user()}
@@ -138,7 +148,7 @@ export default function Layout(props: RouteSectionProps) {
                       My bets
                     </A>
                     <button class="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-ink-800" onClick={openCustomize}>
-                      Customize the look
+                      Customize look & sound
                     </button>
                     <button class="block w-full rounded-lg px-3 py-2 text-left text-sm text-loss hover:bg-ink-800" onClick={logout}>
                       Log out
@@ -170,7 +180,8 @@ export default function Layout(props: RouteSectionProps) {
             </span>
           </div>
           <div class="flex flex-wrap gap-4">
-            <button class="hover:text-ink-200" onClick={openCustomize}>Customize the look</button>
+            <button class="hover:text-ink-200" onClick={openCustomize}>Customize</button>
+            <button class="hover:text-ink-200" onClick={() => tasteTest.show()}>Pick your style</button>
             <button class="hover:text-ink-200" onClick={feedbackPanel.show}>Feedback</button>
             <A href="/wallet#limits" class="hover:text-ink-200">Set limits</A>
             <A href="/wallet#self-exclusion" class="hover:text-ink-200">Self-exclusion</A>
@@ -179,6 +190,11 @@ export default function Layout(props: RouteSectionProps) {
         </div>
       </footer>
       <FeedbackDock />
+      {/* Bottom left: the taste test or its invitation, or later the one-tap rating (one at a time, see prompts.ts). */}
+      <TasteTestDock />
+      <Show when={prompts.current() === 'pulse' && !tasteTest.open()}>
+        <PulseCard />
+      </Show>
       <Toaster />
     </div>
   );

@@ -28,6 +28,12 @@ public class FrontendConfig implements WebMvcConfigurer {
         registry.addResourceHandler("/assets/**")
                 .addResourceLocations(withSuffix("assets/"))
                 .setCacheControl(CacheControl.maxAge(365, TimeUnit.DAYS).cachePublic().immutable());
+        // Music and stingers (frontend/scripts/wiki_music.py): large, and only change when the script is re-run, so a
+        // returning visitor needn't download them again. Range requests (seeking, streaming) work as usual.
+        // manifest.json falls through to the handler below and is always revalidated.
+        registry.addResourceHandler("/music/*.mp3")
+                .addResourceLocations(withSuffix("music/"))
+                .setCacheControl(CacheControl.maxAge(7, TimeUnit.DAYS).cachePublic());
         // Everything else; index.html must be revalidated so a new deploy is picked up.
         registry.addResourceHandler("/**")
                 .addResourceLocations(locations)

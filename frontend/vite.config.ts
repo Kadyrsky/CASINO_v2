@@ -16,6 +16,8 @@ export default defineConfig({
   build: { target: 'es2022' },
   test: {
     include: ['src/**/*.test.ts'],
+    // The tests are plain logic (no DOM), so they don't need jsdom.
+    environment: 'node',
   },
   lint: {
     ignorePatterns: ['dist/**', 'node_modules/**', 'src/api/schema.d.ts'],

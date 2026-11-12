@@ -319,29 +319,81 @@ Licensed countries (`naebka.registration.licensed-countries`): United Kingdom, M
 Republic, Netherlands, Croatia, Estonia, Italy, Latvia, Switzerland, Romania, Spain, Lithuania, North Macedonia,
 Germany, Hungary, Montenegro, Slovenia, Portugal, Belgium, Ireland, Bulgaria, Greece, Serbia, Slovakia.
 
+## Sound and music
+
+Every button, link and tab clicks, and the games have their own sounds: the slot reels spin and land one by one, wins
+chime (louder for big wins, rising with each win in a row), poker cards deal and chips clack, and a bell rings on your
+turn. A live bet settling plays a win or loss cue on whatever page you're on. There are three **sound packs**:
+
+* **Deadlock**: brass and clockwork (a typewriter-key click, a clock tick, a ratchet for the reels), plus the game's
+  own stingers for the big moments: "First Blood" on the first win of a visit, the rising **killstreak** stingers for
+  wins in a row, "Urn Arrived" for free spins (the slot's scatter is the Soul Urn), "Rift Announced" for the rift bonus,
+  "Rift Secured" for a big win, "Victory" for the jackpot, and the Hidden King's or the Archmother's intro when you pick
+  their theme.
+* **Arcade**: bright square-wave chimes and coins, like a fruit machine.
+* **Soft**: quiet, rounded tones.
+
+The effects are synthesized in the browser with the Web Audio API (`frontend/src/lib/soundPacks.ts`), so they need no
+files and play without delay. **Music** is Deadlock's soundtrack from the [Deadlock Wiki](https://deadlock.wiki/Music),
+in stations: **Lounge** (the Baroness Hotel's records, the Curiosity Shop, the Greenhouse Waltz, Rem's record),
+**Hideout** (the trip-hop title theme), **Gothic** (the original, darker score) and **Rift Fight** (battle loops; can be
+picked, isn't given at random). Tracks cross-fade, short loops repeat, and the music ducks under stingers. Every
+track is evened out to the same loudness (the wiki's files differ by up to 25 dB), and every pack plays each event at
+the same level (`LEVELS` in `soundPacks.ts`), so in the taste test nothing wins just by being louder.
+
+* **Controls:** the speaker button in the header (or the **M** key) mutes everything; *Customize > Sound* has the
+  station, the pack (tap one to hear it), and on/off and volume for each. Settings are kept in the browser.
+* **Defaults:** music on at 50%, effects at 70% (`AUDIO_DEFAULTS` in `frontend/src/lib/audio.ts`). Browsers only allow
+  sound after the first click or key press, so nothing plays before that. Music pauses while the tab is hidden.
+* **Silencing a button:** add `data-sound="none"` (or an event name, like `data-sound="bet"`) to it or a container.
+* **The music files are Valve's**, so they aren't in git. The core's Docker build fetches them
+  (`frontend/scripts/wiki_music.py`, standard library only, 36 files, ~37 MB); for `vp dev` run
+  `python frontend/scripts/wiki_music.py` once. `/music/manifest.json` lists what the server has, and the site only
+  offers that, so without the files it simply has no music. Treat them like the wiki's icons: fine for a class
+  project, but check Valve's terms before any public or commercial use.
+
 ## A/B tests and feedback
 
-Every new visitor is given one version of each experiment at random and keeps it. The **Customize** button at the top
-right opens a drop-down where they can switch to another version at any time (the page updates behind it); on the
-first visit a pop-up points it out. The **Feedback** button in the corner opens a docked panel — no overlay, so people
-can keep using the site while they write, and the draft survives minimising and changing pages. It sends a 1–5
-rating, a category and an optional comment, together with the page, the screen size and the versions the visitor is on.
+With about a hundred visitors who aren't paid to answer, a classic A/B test (each visitor gets one version, compare
+the groups) can only spot huge differences: telling 10% from 15% takes ~700 people per version. So the site combines
+three kinds of evidence; the reasoning, the numbers and a **test-day checklist** are in
+[docs/ab-testing.md](docs/ab-testing.md).
 
-| Experiment | Versions (first = current site) | Switchable |
-|---|---|---|
-| `theme` | Hidden King (amber), Archmother (sapphire), Deadlock (sewer green); Classic (the old gold look) can be picked but isn't given at random | yes |
-| `slot_icons` | Deadlock items, Classic fruit | yes |
-| `join_cta` | "Join", "Get 1,000 free NTK" | no |
+1. **Taste test** (the main evidence): a small card asks "which do you like more?" with two versions side by side,
+   one question each for the theme, the music, the sound effects and the slot symbols. People try both (the page
+   switches to it, or they listen), pick one and keep it, so answering is its own reward; about half a minute. Pairs
+   and sides are random, both versions must be tried before picking, and every answer is sent at once. A first-visit
+   card invites people after a few seconds of use; it is also under *Customize* and in the footer ("Pick your style").
+2. **Random assignment** (supporting): every visitor still gets one version of each experiment at random and can
+   switch under *Customize*. Each experiment is judged on one number chosen in advance, e.g. how many people turned the
+   music off.
+3. **One-tap rating**: five faces at the end of the taste test, or once after a couple of minutes of use, then optional
+   reason chips ("Love the music", "Hard to read"...) and a comment. The **Feedback** button in the corner stays for
+   bugs and longer notes (docked, no overlay, the draft survives page changes). Prompts never appear on forms, never two
+   at once, and at most once per visitor.
 
-- **Where:** experiments are defined in `frontend/src/lib/experiments.ts` (with how to add one). The core
-  (`core/.../ab/AbController.java`, migration `V8__experiments.sql`) stores what visitors were given, what they are on
-  now, their switches, the goals they reach (registered, bet placed, spun slots, sat at poker) and their feedback.
-- **Results:** `/admin` → *A/B experiments* and *Feedback*. Results are counted by the version people were **first
-  given**, so the comparison stays fair even though people can switch; a high "switched away" share means people
-  don't like that version. ✱ marks goal rates that differ from the control by more than chance (p < 0.05).
-  For a gap like 10% vs 15% you need about 700 people per version.
-- **Testing a version:** open the site with `?ab=theme:archmother,slot_icons:classic` to force versions in that tab
-  (`?ab=` clears it). Forced visits are not counted, so Lighthouse runs and QA don't skew the results:
+| Experiment | Versions (first = control) | Primary metric | Taste test |
+|---|---|---|---|
+| `theme` | Hidden King (amber), Archmother (sapphire), Deadlock (sewer green); Classic (the old gold look) can be picked but isn't given at random | changed by hand (lower is better) | yes |
+| `music` | Lounge, Hideout, Gothic; Rift Fight can be picked | turned the music off | yes |
+| `sfx_pack` | Deadlock, Arcade, Soft | turned the sounds off | yes |
+| `slot_icons` | Deadlock items, Classic fruit | changed by hand | yes |
+| `join_cta` | "Join", "Get 1,000 free NTK" (not switchable) | registered (higher is better) | no |
+
+- **Results:** `/admin` > *Recommended combination* (each experiment's leader and how sure we are: clear, likely, too
+  close to call), *Taste test* (a Bradley-Terry ranking from all head-to-heads, each version's chance of being the
+  favourite, win rates with 95% ranges, and checks that people tried both and didn't just pick a side), *Between
+  visitors* (by the version people were first given, with each version's chance of being best on the primary metric)
+  and *Feedback* (with the most common reasons). Each card exports CSV. The statistics are in
+  `frontend/src/lib/stats.ts` (unit-tested).
+- **Where:** experiments, their primary metrics and taste-test questions are defined in
+  `frontend/src/lib/experiments.ts` (with how to add one). The core (`core/.../ab/AbController.java`, migrations
+  `V8__experiments.sql` and `V9__taste_test.sql`) stores what visitors were given and are on now, their switches (by
+  hand or from the taste test), their goals (registered, bet placed, spun slots, sat at poker, music off, sounds off),
+  their taste-test answers and their feedback. The public endpoints are rate-limited per visitor, with a looser limit
+  per address, so a classroom on one network isn't throttled as one person.
+- **Testing a version:** open the site with `?ab=theme:archmother,music:gothic` to force versions in that tab (`?ab=`
+  clears it). Forced visits are not counted and get no prompts, so Lighthouse runs and QA don't skew the results:
   `npx lighthouse "http://localhost:8080/?ab=theme:archmother" --view`.
 - **Deadlock style:** the three Deadlock themes share a calm slate base modelled on
   [thedeadlockobservatory.com](https://thedeadlockobservatory.com/) (solid panels, soft text, one accent) and switch on
@@ -358,10 +410,10 @@ rating, a category and an optional comment, together with the page, the screen s
 ## Tests
 
 ```bash
-# Java: 72 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules,
+# Java: 76 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules,
 # deadlock-api -> Steam bot fallback, Ethereum signatures, deposit-log parsing, payout encoding and signing)
 cd core && mvn test
-# + 44 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
+# + 51 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
 cd core && mvn -Pit test
 # Coverage (JaCoCo) is written by both commands: core/target/site/jacoco/index.html
 
@@ -370,8 +422,8 @@ cd live && python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"   # bin
 .venv/Scripts/python -m pytest && .venv/Scripts/python -m mypy naebka_live tests
 .venv/Scripts/python -m pytest --cov=naebka_live --cov-report=html   # coverage: live/htmlcov/index.html
 
-# Frontend (no local Node needed)
-docker run --rm -v "$PWD/frontend:/app" -w /app node:22-alpine sh -c "npm install && npx tsc --noEmit && npx vp lint src && npm run build"
+# Frontend (no local Node needed): types, lint, 17 unit tests (the A/B statistics), build
+docker run --rm -v "$PWD/frontend:/app" -w /app node:22-alpine sh -c "npm install && npx tsc --noEmit && npx vp lint src && npx vp test run && npm run build"
 
 # Steam bot: 35 unit tests (needs Rust and protoc, see deadlock-bot/README.md)
 cd deadlock-bot && cargo test
@@ -437,7 +489,7 @@ Where the documents disagreed or left things open, this is what was built and wh
 | Money type | LLD: `BigDecimal` | `long` minor units (DB design: "minor units") | Exact integer arithmetic; API still speaks decimal tokens |
 | Settlement when stream lost the winner | Strict agreement required | Settles from the official report alone if the stream has no winner; any *disagreement* still goes to review | The public API usually drops a match before showing its winner; strict mode would send almost every match to review |
 | Accept higher odds | – | Opt-in on the bet slip (default on) | Live prices drift every few seconds; price drops still need reconfirmation |
-| Frontend tests | – | Type-check + Vite+ lint; no component tests yet | Time; backend logic is covered |
+| Frontend tests | – | Type-check + Vite+ lint + unit tests for the A/B statistics; no component tests yet | Time; backend logic is covered |
 
 ## Known gaps (not built)
 

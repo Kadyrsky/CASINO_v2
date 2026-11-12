@@ -8,8 +8,12 @@ import { Badge, Button, Field, Input, Modal, Spinner } from '../components/ui';
 import { auth } from '../lib/auth';
 import { ab } from '../lib/experiments';
 import { chips, humanize, tokens } from '../lib/format';
+import type { SoundEvent } from '../lib/soundPacks';
+import { sounds } from '../lib/sounds';
 import { wallet } from '../lib/wallet';
 import { hub, useHubMessages, useTopic } from '../lib/ws';
+
+const ACTION_SOUNDS: Record<string, SoundEvent> = { FOLD: 'fold', CHECK: 'check', CALL: 'chips', BET: 'chips', RAISE: 'chips', ALL_IN: 'chips' };
 
 interface ActionLog {
   id: number;
@@ -41,16 +45,26 @@ export default function PokerTablePage() {
   useTopic(
     () => `poker:${params.id}`,
     (msg) => {
-      if (msg.type === 'POKER_STATE') setTable(msg.data as PokerPublicState);
+      if (msg.type === 'POKER_STATE') {
+        const next = msg.data as PokerPublicState;
+        const prev = table();
+        // Cards on the table: a new hand dealt, or the flop, turn or river.
+        if (next.handInProgress && (next.handNumber !== prev?.handNumber || next.board.length > (prev?.board.length ?? 0))) sounds.play('deal');
+        setTable(next);
+      }
       if (msg.type === 'POKER_ACTION') {
         const a = msg.data as { username: string; action: string; amount: number };
         const amount = ['BET', 'RAISE'].includes(a.action) ? ` to ${chips(a.amount)}` : '';
         setLog((l) => [{ id: msg.seq ?? Date.now(), text: `${a.username} ${humanize(a.action).toLowerCase()}${amount}` }, ...l].slice(0, 30));
+        const sound = ACTION_SOUNDS[a.action];
+        if (sound) sounds.play(sound);
       }
       if (msg.type === 'POKER_HAND_COMPLETE') {
         const r = msg.data as { handNumber: number; winnings: Record<string, number>; rake: number };
         const names = Object.entries(r.winnings).map(([id, amt]) => `${nameOf(id)} wins ${chips(amt)}`);
         setLog((l) => [{ id: Date.now(), text: `Hand #${r.handNumber}: ${names.join(', ')}` }, ...l].slice(0, 30));
+        const myId = auth.user()?.id;
+        if (myId && (r.winnings[myId] ?? 0) > 0) sounds.play('potWon');
       }
     },
   );
@@ -86,6 +100,8 @@ export default function PokerTablePage() {
     return d ? Math.max(0, Math.ceil((new Date(d).getTime() - now()) / 1000)) : null;
   };
   createEffect(on(() => legal()?.minRaiseTo, (min) => min != null && setRaiseTo(min)));
+  // A bell when it becomes the player's turn.
+  createEffect(on(() => !!legal(), (mine, was) => mine && !was && sounds.play('yourTurn'), { defer: true }));
 
   const shownCards = createMemo(() => (table()?.handInProgress ? {} : (table()?.lastResult?.shown ?? {})));
 

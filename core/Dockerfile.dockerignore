@@ -6,3 +6,5 @@
 **/node_modules
 **/dist
 **/target
+# The image fetches the music itself (the "music" stage), so a local copy needn't be sent along.
+frontend/public/music

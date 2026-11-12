@@ -9,10 +9,34 @@ import { Badge, Button, Card, Empty, Modal, PageHeader } from '../components/ui'
 import { auth } from '../lib/auth';
 import { ab } from '../lib/experiments';
 import { ago, fiat, humanize, tokens } from '../lib/format';
+import type { SoundEvent } from '../lib/soundPacks';
+import { sounds } from '../lib/sounds';
 import { wallet } from '../lib/wallet';
 import { useTopic } from '../lib/ws';
 
 const BET_STEPS = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10];
+
+/** Wins in a row (the Deadlock pack plays the rising killstreak stingers), kept while moving between pages. */
+let winStreak = 0;
+
+/** The sound for a spin's result; a win of 10× the bet or more is a big win. */
+function outcomeSound(r: SpinResult, totalBet: number): [SoundEvent, number] {
+  winStreak = r.totalWin > 0 ? winStreak + 1 : 0;
+  if (r.jackpotWin > 0) return ['jackpot', 0];
+  if (r.freeSpinsAwarded > 0) return ['freeSpins', 0];
+  if (r.isBonusGameTriggered) return ['bonus', 0];
+  if (r.totalWin <= 0) return ['lose', 0];
+  if (r.totalWin >= totalBet * 10) return ['bigWin', 0];
+  try {
+    if (sessionStorage.getItem('naebka.firstWin') !== '1') {
+      sessionStorage.setItem('naebka.firstWin', '1');
+      return ['firstWin', 0];
+    }
+  } catch {
+    // storage blocked: no "first blood"
+  }
+  return winStreak >= 2 ? ['streak', winStreak] : ['win', 0];
+}
 
 function SlotSymbol(props: { id: string; win?: boolean; spinning?: boolean; delay?: number }) {
   const art = () => SYMBOL_ART[props.id];
@@ -83,13 +107,20 @@ export default function Slots() {
     if (spinning()) return;
     setSpinning(true);
     setResult(null);
+    sounds.play('spin');
     const started = Date.now();
     try {
-      const r = slotState() === 'FREE_SPINNING'
+      const free = slotState() === 'FREE_SPINNING';
+      const bet = free ? paytableBet() * (game.data?.paylines.length ?? 10) : totalBet();
+      const r = free
         ? await post<SpinResult>('/api/slots/free-spin')
         : await post<SpinResult>('/api/slots/spin', { betPerLine: betPerLine() });
       await new Promise((ok) => setTimeout(ok, Math.max(0, 700 - (Date.now() - started))));
       setResult(r);
+      // The reels land one after another (the 60 ms stagger of the tiles), then the result sounds.
+      for (let reel = 0; reel < 5; reel++) sounds.play('reelStop', reel, { delay: reel * 0.06 });
+      const [event, n] = outcomeSound(r, bet);
+      sounds.play(event, n, { delay: 0.34 });
       wallet.set(r.balance);
       ab.track('slot_spin');
       if (r.jackpotWin > 0) toast.success(`JACKPOT! ${tokens(r.jackpotWin)} NTK`);
@@ -112,7 +143,9 @@ export default function Slots() {
     try {
       const r = await post<BonusPick>('/api/slots/bonus/pick', { choice: box });
       setBonusBoard({ ...bonusBoard(), [box]: r.reward });
+      sounds.play('bonusPick');
       if (r.completed) {
+        sounds.play('bonusEnd', 0, { delay: 0.3 });
         setRevealed(r.revealedBoard);
         wallet.set(r.balance);
         toast.success(`Bonus complete: +${tokens(r.totalBonusWin)} NTK`);
@@ -161,6 +194,7 @@ export default function Slots() {
                     const mine = () => opened()[i] != null;
                     return (
                       <button
+                        data-sound="none"
                         disabled={value() != null || !!revealed()}
                         onClick={() => pick(i)}
                         class={`grid aspect-square place-items-center rounded-lg border text-sm font-bold transition-all ${
@@ -237,7 +271,7 @@ export default function Slots() {
                   <button class="grid size-9 place-items-center rounded-lg bg-ink-700 font-bold hover:bg-ink-600 disabled:opacity-40" disabled={betIdx() === BET_STEPS.length - 1 || spinning()} onClick={() => setBetIdx(betIdx() + 1)} aria-label="Raise bet">+</button>
                 </div>
               </Show>
-              <Button size="lg" class="min-w-44 text-lg" loading={spinning()} disabled={slotState() === 'BONUS_GAME'} onClick={spin}>
+              <Button data-sound="none" size="lg" class="min-w-44 text-lg" loading={spinning()} disabled={slotState() === 'BONUS_GAME'} onClick={spin}>
                 {slotState() === 'FREE_SPINNING' ? `Free spin (${freeSpins()})` : 'Spin'}
               </Button>
             </div>
