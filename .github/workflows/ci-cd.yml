@@ -122,7 +122,7 @@ jobs:
           printf 'Host target\n  HostName %s\n  User %s\n  IdentityFile ~/.ssh/id_deploy\n  IdentitiesOnly yes\n' \
             "${{ secrets.DEPLOY_HOST }}" "${{ secrets.DEPLOY_USER }}" > ~/.ssh/config
       - name: Upload compose files
-        run: scp deploy/docker-compose.prod.yml deploy/Caddyfile deploy/server-deploy.sh target:/opt/naebka/
+        run: scp deploy/docker-compose.prod.yml deploy/Caddyfile deploy/haproxy.cfg deploy/server-deploy.sh target:/opt/naebka/
       - name: Pull images and restart
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}

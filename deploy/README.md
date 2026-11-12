@@ -3,7 +3,7 @@
 ```
 GitHub push to main ──► Actions: tests ──► build images ──► ghcr.io/kadyrsky/casino_v2-{core,live}:<sha>
                                                         └─► SSH to server: server-deploy.sh <sha>
-Server /opt/naebka:  caddy (80/443, HTTPS) ──► core:8081 ──► postgres, redis ◄── watcher, odds-engine
+Server /opt/naebka:  sni-router (443) ─► caddy (80, HTTPS) ──► core:8081 ──► postgres, redis ◄── watcher, odds-engine
 ```
 
 | File | Purpose |
@@ -11,12 +11,34 @@ Server /opt/naebka:  caddy (80/443, HTTPS) ──► core:8081 ──► postgre
 | `.github/workflows/ci-cd.yml` | Tests on every push/PR; on `main` also builds, pushes and deploys |
 | `deploy/docker-compose.prod.yml` | Production stack (prebuilt images, only Caddy is public, memory limits for 1 GB RAM) |
 | `deploy/Caddyfile` | Reverse proxy + automatic Let's Encrypt certificate for `SITE_DOMAIN` |
+| `deploy/haproxy.cfg` | SNI router on public 443: `poker.naebka.win` → Caddy, anything else → Amnezia VPN |
 | `deploy/server-deploy.sh` | Runs on the server: pull the tag, restart, wait for health, roll back on failure |
 
 ## Server
 
 Ubuntu, Docker + Compose plugin, 2 GB swap, `ufw` (22, 80, 443 only), `fail2ban`, user `deploy` (docker group).
 Everything lives in `/opt/naebka`; secrets are in `/opt/naebka/.env` (mode 600, never in git).
+
+## Port 443 is shared with the Amnezia VPN
+
+The server also runs an Amnezia VPN (`amnezia-xray`, VLESS + Reality). `sni-router` (HAProxy) owns public port 443
+and routes by TLS server name: `poker.naebka.win` goes to Caddy (`127.0.0.1:8443`, real client IP via PROXY
+protocol), everything else goes to xray (`127.0.0.1:8444`). VPN clients need no changes.
+
+If the Amnezia app re-installs or re-creates xray, it will publish `0.0.0.0:443` again and the router won't start.
+Re-create it on the internal port (same image, volume and network; `/root/amnezia-xray-start.sh` is Amnezia's start
+script, which lives inside the container, not in the volume):
+
+```bash
+docker rm -f amnezia-xray
+docker create --name amnezia-xray --restart always --privileged --cap-add NET_ADMIN --log-driver none \
+  -e TZ=Asia/Shanghai -v amnezia-xray-data:/opt/amnezia/xray --network amnezia-dns-net \
+  -p 127.0.0.1:8444:443/tcp amnezia-xray
+docker network connect bridge amnezia-xray
+docker cp /root/amnezia-xray-start.sh amnezia-xray:/opt/amnezia/start.sh
+docker start amnezia-xray
+cd /opt/naebka && docker compose -f docker-compose.prod.yml up -d
+```
 
 ## GitHub repository secrets
 

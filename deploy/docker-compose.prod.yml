@@ -99,11 +99,23 @@ services:
       redis: { condition: service_healthy }
     mem_limit: 96m
 
+  # Public port 443 is shared with the Amnezia VPN: this router sends poker.naebka.win to Caddy and the rest to
+  # the VPN (deploy/haproxy.cfg). Host networking so it can reach both on 127.0.0.1.
+  sni-router:
+    image: haproxy:3.0-alpine
+    restart: unless-stopped
+    network_mode: host
+    user: root   # binds port 443
+    volumes: ["./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro"]
+    depends_on: [caddy]
+    mem_limit: 64m
+
   # Reverse proxy + automatic HTTPS (Let's Encrypt) for SITE_DOMAIN. Proxies WebSockets (/ws) out of the box.
+  # HTTPS arrives via sni-router on 127.0.0.1:8443; HTTP (and the ACME challenge) directly on port 80.
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
-    ports: ["80:80", "443:443", "443:443/udp"]
+    ports: ["80:80", "127.0.0.1:8443:443"]
     environment:
       SITE_DOMAIN: ${SITE_DOMAIN:-poker.naebka.win}
       SERVER_IP: ${SERVER_IP:-}
