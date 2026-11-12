@@ -502,3 +502,8 @@ Where the documents disagreed or left things open, this is what was built and wh
 * Reality-check reminders, first-withdrawal delay, chargeback / negative-balance policy (Risk #12).
 * Kubernetes deployment, load tests, SonarQube/CI pipeline.
 * Poker: no rebuy/top-up (leave and sit again), no run-it-twice; slot "SlotEventListener" is not used.
+
+Merge PR #24.
+DNS: in the naebka.win zone, add an A record poker → 37.27.152.78. If the domain is on Cloudflare, set it to DNS only (grey cloud).
+Admin login for /admin: username admin, password VpROdtQLmAGQ0Ykj7xQremyC. Change it in /opt/naebka/.env if you like, then restart.
+Root password: it was shared in this chat, so change it with passwd on the server. Password login is still on (fail2ban only limits it). Once you've confirmed SSH-key login works for you, consider turning password login off.

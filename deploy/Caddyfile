@@ -1,3 +1,17 @@
+# HTTPS reaches Caddy through the SNI router (deploy/haproxy.cfg) on public port 443, which prepends a PROXY
+# protocol header carrying the real client IP. Port 80 is published directly.
+{
+	servers :443 {
+		listener_wrappers {
+			proxy_protocol {
+				timeout 5s
+				allow 0.0.0.0/0 ::/0
+			}
+			tls
+		}
+	}
+}
+
 # The site. Caddy gets and renews the HTTPS certificate by itself as soon as the domain's DNS A record points here;
 # until then it keeps retrying in the background (harmless).
 {$SITE_DOMAIN} {
