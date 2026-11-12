@@ -12,7 +12,7 @@ import { bradleyTerry, chanceBestPaired, chanceBestRates, confidence, median, wi
 import { TAGS } from './QuickRating';
 import { Badge, Card, Empty, Select } from './ui';
 
-interface VariantResult {
+export interface VariantResult {
   variant: string;
   visitors: number;
   switchedAway: number;
@@ -23,13 +23,13 @@ interface VariantResult {
   ratings: number;
 }
 
-interface ExperimentResult {
+export interface ExperimentResult {
   experiment: string;
   variants: VariantResult[];
   switches: { from: string; to: string; source: string; count: number }[];
 }
 
-interface VoteRow {
+export interface VoteRow {
   experiment: string;
   variantA: string;
   variantB: string;
@@ -41,7 +41,7 @@ interface VoteRow {
   createdAt: string;
 }
 
-interface FeedbackItem {
+export interface FeedbackItem {
   id: number;
   username: string | null;
   rating: number;
@@ -56,7 +56,7 @@ interface FeedbackItem {
   createdAt: string;
 }
 
-interface VisitorRow {
+export interface VisitorRow {
   visitorId: string;
   registered: boolean;
   firstSeen: string;
@@ -82,8 +82,8 @@ const METRIC_LABELS: Record<string, string> = {
   slot_spin: 'spun the slots',
   poker_sit: 'sat at poker',
 };
-const SOURCES: Record<FeedbackItem['source'], string> = { button: 'Feedback button', pulse: 'One-tap rating', taste_test: 'After taste test' };
-const FACES = ['', '😞', '🙁', '😐', '🙂', '😍'];
+export const SOURCES: Record<FeedbackItem['source'], string> = { button: 'Feedback button', pulse: 'One-tap rating', taste_test: 'After taste test' };
+export const FACES = ['', '😞', '🙁', '😐', '🙂', '😍'];
 
 const CONFIDENCE: Record<Confidence, { label: string; tone: 'win' | 'gold' | 'neutral' }> = {
   clear: { label: 'Clear winner', tone: 'win' },
@@ -127,7 +127,7 @@ function CsvButton(props: { onClick: () => void; children: JSX.Element }) {
 
 // ---- Taste test ----
 
-interface TasteSummary {
+export interface TasteSummary {
   experiment: Experiment;
   rows: { id: string; strength: number; best: number; wins: number; games: number; ci: [number, number] }[];
   answers: number;
@@ -139,7 +139,7 @@ interface TasteSummary {
   headToHead: (a: string, b: string) => [number, number];
 }
 
-function summarize(e: Experiment, votes: VoteRow[]): TasteSummary {
+export function summarize(e: Experiment, votes: VoteRow[]): TasteSummary {
   const items = e.variants.filter((v) => !v.pickOnly).map((v) => v.id);
   const mine = votes.filter((v) => v.experiment === e.key && items.includes(v.variantA) && items.includes(v.variantB));
   const decided = mine.filter((v) => v.winner);
@@ -170,7 +170,7 @@ function summarize(e: Experiment, votes: VoteRow[]): TasteSummary {
   };
 }
 
-function useVotes() {
+export function useVotes() {
   return createQuery(() => ({
     queryKey: ['admin-ab-votes'],
     queryFn: () => get<VoteRow[]>('/api/admin/ab/votes'),
@@ -178,7 +178,7 @@ function useVotes() {
   }));
 }
 
-function useResults() {
+export function useResults() {
   return createQuery(() => ({
     queryKey: ['admin-ab'],
     queryFn: () => get<ExperimentResult[]>('/api/admin/ab/results'),
@@ -186,7 +186,27 @@ function useResults() {
   }));
 }
 
-function ConfidenceBadge(props: { level: Confidence }) {
+/** All feedback (the same cache entry the Feedback card uses when it isn't filtered). */
+export function useFeedback(filter: () => string = () => '') {
+  return createQuery(() => ({
+    queryKey: ['admin-feedback', filter()],
+    queryFn: () => {
+      const [experiment, variant] = filter().split(':');
+      return get<FeedbackItem[]>('/api/admin/feedback', { experiment, variant });
+    },
+    refetchInterval: 30_000,
+  }));
+}
+
+export function useVisitors() {
+  return createQuery(() => ({
+    queryKey: ['admin-ab-visitors'],
+    queryFn: () => get<VisitorRow[]>('/api/admin/ab/visitors'),
+    refetchInterval: 60_000,
+  }));
+}
+
+export function ConfidenceBadge(props: { level: Confidence }) {
   return <Badge tone={CONFIDENCE[props.level].tone}>{CONFIDENCE[props.level].label}</Badge>;
 }
 
@@ -516,14 +536,7 @@ export function ExperimentsCard() {
 
 export function FeedbackCard() {
   const [filter, setFilter] = createSignal('');
-  const feedback = createQuery(() => ({
-    queryKey: ['admin-feedback', filter()],
-    queryFn: () => {
-      const [experiment, variant] = filter().split(':');
-      return get<FeedbackItem[]>('/api/admin/feedback', { experiment, variant });
-    },
-    refetchInterval: 30_000,
-  }));
+  const feedback = useFeedback(filter);
   const items = () => feedback.data ?? [];
   const average = () => (items().length ? (items().reduce((s, f) => s + f.rating, 0) / items().length).toFixed(1) : null);
   const bySource = () => (Object.keys(SOURCES) as FeedbackItem['source'][]).map((s) => [s, items().filter((f) => f.source === s).length] as const);

@@ -7,14 +7,14 @@ music player and the Deadlock sound pack.
 Writes public/music/<slug>.mp3 and public/music/manifest.json ({slug: {"duration": seconds, "bytes": n, "lufs": x}}).
 The frontend (src/lib/musicCatalog.ts) only offers what the manifest lists.
 
-Files already in the folder are kept, so the music can also be copied in by hand (from a teammate, or from a machine
-that can reach the wiki): the script picks the MP3s up even without their manifest and only downloads what's missing.
+The files are committed in public/music (the repository is private), so this is only needed to add or refresh tracks.
+Files already in the folder are kept: the script picks MP3s up even without their manifest and downloads what's missing.
 
 The tracks differ in loudness by up to 25 dB (the hotel's record is mixed far quieter than the title theme). If ffmpeg
 is installed (the Docker build installs it), each file's integrated loudness (EBU R128, in LUFS) goes into the
 manifest and the player evens them out, so in the taste test no station wins just by being louder.
 
-The audio is Valve's, as hosted by the wiki. It is not committed to git (see .gitignore).
+The audio is Valve's, as hosted by the wiki: if the repository is ever made public, take the files out of git first.
 """
 import argparse
 import json
@@ -70,8 +70,8 @@ FILES = {**TRACKS, **STINGERS}
 
 HOW_TO_FIX = """wiki_music: how to get the music:
   - try again: a network hiccup is the usual cause (the next build retries, a failed step isn't cached);
-  - or copy the folder frontend/public/music from a teammate who has it (or run
-    `python frontend/scripts/wiki_music.py` on a machine that can open https://deadlock.wiki), then build again;
+  - or restore frontend/public/music from git (it is committed), or run `python frontend/scripts/wiki_music.py` on
+    a machine that can open https://deadlock.wiki, then build again;
   - or build without fetching music: NAEBKA_MUSIC=skip docker compose up --build"""
 
 # MPEG audio frame tables (Layer III only), for the duration.

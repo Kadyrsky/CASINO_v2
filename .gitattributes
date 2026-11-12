@@ -3,3 +3,4 @@
 *.rtf linguist-documentation
 *.rst linguist-documentation
 *.png binary
+*.mp3 binary

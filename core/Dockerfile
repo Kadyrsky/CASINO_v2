@@ -8,11 +8,10 @@ COPY frontend/ .
 # The music comes from the "music" stage below, so a local copy in public/ isn't built in a second time.
 RUN rm -rf public/music && npm run build
 
-# Deadlock's music and stingers (frontend/scripts/wiki_music.py, standard library only). The audio is Valve's, so it
-# isn't kept in git: files already in frontend/public/music (from running the script, or copied from a teammate) are
-# used as they are, and only what's missing is fetched from the Deadlock Wiki. ffmpeg measures each file's loudness so
-# the player can even them out. If background tracks are still missing, the build stops and says what to do; a failed
-# step isn't cached, so the next build tries again. NAEBKA_MUSIC=skip builds with the local files only (maybe none).
+# Deadlock's music and stingers, committed in frontend/public/music (frontend/scripts/wiki_music.py downloaded them
+# from the Deadlock Wiki). The files there are used as they are; anything missing is fetched from the wiki, and if
+# music tracks are still missing the build stops and says what to do (a failed step isn't cached, so the next build
+# tries again). ffmpeg measures loudness the manifest lacks. NAEBKA_MUSIC=skip never contacts the wiki (CI uses it).
 FROM python:3.12-alpine AS music
 RUN apk add --no-cache ffmpeg
 ARG MUSIC=fetch

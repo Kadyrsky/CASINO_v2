@@ -4,9 +4,10 @@ import { createSignal, For, Show } from 'solid-js';
 import { get, post } from '../api/client';
 import type { KycSubmission, Match } from '../api/types';
 import { ExperimentsCard, FeedbackCard, RecommendationCard, TasteTestCard } from '../components/adminAb';
+import { AbCharts } from '../components/adminCharts';
 import { KycChecks } from '../components/kyc';
 import { toast } from '../components/toast';
-import { Badge, Button, Card, Empty, Input, PageHeader, Stat } from '../components/ui';
+import { Badge, Button, Card, Empty, Input, PageHeader, Stat, Tabs } from '../components/ui';
 import { ago, countryName, humanize } from '../lib/format';
 
 interface Health {
@@ -119,8 +120,28 @@ function KycReviewItem(props: { submission: KycSubmission; onDone: () => void })
   );
 }
 
+const AB_VIEW_KEY = 'naebka.admin.abView';
+
 export default function Admin() {
   const queryClient = useQueryClient();
+  // Charts or tables for the A/B section, remembered in this browser.
+  const [abView, setAbViewSignal] = createSignal<'charts' | 'tables'>(
+    (() => {
+      try {
+        return localStorage.getItem(AB_VIEW_KEY) === 'tables' ? 'tables' : 'charts';
+      } catch {
+        return 'charts';
+      }
+    })(),
+  );
+  const setAbView = (v: 'charts' | 'tables') => {
+    setAbViewSignal(v);
+    try {
+      localStorage.setItem(AB_VIEW_KEY, v);
+    } catch {
+      // storage blocked: the choice lasts for this page only
+    }
+  };
   const health = createQuery(() => ({ queryKey: ['admin-health'], queryFn: () => get<Health>('/api/admin/health'), refetchInterval: 10_000 }));
   const queue = createQuery(() => ({ queryKey: ['review-queue'], queryFn: () => get<Match[]>('/api/admin/review-queue') }));
   const kycQueue = createQuery(() => ({ queryKey: ['kyc-queue'], queryFn: () => get<KycSubmission[]>('/api/admin/kyc/queue') }));
@@ -177,10 +198,26 @@ export default function Admin() {
           </ul>
         </Show>
       </Card>
+      <div class="mt-10 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 class="text-xl font-bold">A/B tests and feedback</h2>
+          <p class="text-sm text-ink-400">Charts for the overview; tables for every exact figure and the CSV exports.</p>
+        </div>
+        <Tabs value={abView()} onChange={setAbView} options={[{ value: 'charts', label: 'Charts' }, { value: 'tables', label: 'Tables' }]} />
+      </div>
       <RecommendationCard />
-      <TasteTestCard />
-      <ExperimentsCard />
-      <FeedbackCard />
+      <Show
+        when={abView() === 'charts'}
+        fallback={
+          <>
+            <TasteTestCard />
+            <ExperimentsCard />
+            <FeedbackCard />
+          </>
+        }
+      >
+        <AbCharts />
+      </Show>
     </div>
   );
 }

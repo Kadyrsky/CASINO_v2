@@ -23,10 +23,8 @@ if [ -n "$TOKEN" ] && [ -n "$GH_USER" ]; then
   trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
 fi
 
-# The music folder the core mounts (deploy/README.md, "Music"). Created here, as this user, so the music can be
-# uploaded with scp; if Docker created it for the mount, it would belong to root.
-mkdir -p music
-[ -f music/manifest.json ] || echo "Note: /opt/naebka/music is empty, so the site has no music (deploy/README.md, Music)."
+# The feedback file's folder (deploy/README.md, "Feedback file"), created as this user so it can read and copy it.
+mkdir -p data
 
 "${COMPOSE[@]}" pull --quiet
 "${COMPOSE[@]}" up -d --remove-orphans

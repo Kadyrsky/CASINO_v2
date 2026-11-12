@@ -7,6 +7,8 @@
 **/.pytest_cache/
 **/.venv/
 .idea/
+# The local copy of the feedback (docker-compose.yml: NAEBKA_FEEDBACK_FILE)
+/data/
 .vscode/
 *.iml
 **/*.egg-info/
@@ -17,5 +19,3 @@ contracts/artifacts/
 .coverage
 **/htmlcov/
 
-# Deadlock's music and stingers (Valve's audio): fetched by frontend/scripts/wiki_music.py, not kept in git
-frontend/public/music/
