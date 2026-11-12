@@ -30,6 +30,9 @@ Live matches appear within ~10 s: the watcher picks fresh ranked games from `api
 The admin account (manual-review queue and integrity dashboard at `/admin`) comes from `.env.example`
 (`NAEBKA_ADMIN_USERNAME` / `NAEBKA_ADMIN_PASSWORD`). Copy it to `.env` to change values.
 
+**Production** (<https://poker.naebka.win>): every push to `main` is tested, built and deployed by GitHub Actions;
+see [deploy/README.md](deploy/README.md).
+
 ## MetaMask + Sepolia deposits and withdrawals (web3)
 
 Players connect MetaMask, deposit **Sepolia test ETH** to get play tokens (0.001 ETH = 100 NTK by default), and

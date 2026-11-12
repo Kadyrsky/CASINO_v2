@@ -1,0 +1,120 @@
+# Naebka — production stack on the VPS (poker.naebka.win). Used by .github/workflows/ci-cd.yml, which copies this
+# folder to /opt/naebka on the server. Images are built by GitHub Actions and pulled from GHCR, so the server never
+# compiles anything (it has 1 CPU / 1 GB RAM). Secrets live only in /opt/naebka/.env on the server (see deploy/README.md).
+#
+# Differences from the root docker-compose.yml (local development):
+#   * prebuilt images (IMAGE_TAG, set by the deploy job) instead of `build:`
+#   * Postgres, Redis and core publish no ports; only Caddy is public (80/443, automatic HTTPS)
+#   * no Steam bot (optional; it would need a Rust build and a Steam login)
+#   * memory limits sized for a 1 GB server with 2 GB swap
+name: naebka
+
+x-live-image: &live-image ghcr.io/kadyrsky/casino_v2-live:${IMAGE_TAG:-latest}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: naebka
+      POSTGRES_USER: naebka
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U naebka -d naebka"]
+      interval: 5s
+      retries: 20
+    mem_limit: 256m
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru", "--save", ""]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 20
+    mem_limit: 96m
+
+  core:
+    image: ghcr.io/kadyrsky/casino_v2-core:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx384m -Xss512k -XX:+UseSerialGC -XX:MaxMetaspaceSize=160m"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/naebka
+      SPRING_DATASOURCE_USERNAME: naebka
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      NAEBKA_JWT_SECRET: ${NAEBKA_JWT_SECRET:?set NAEBKA_JWT_SECRET in .env}
+      NAEBKA_KYC_DOCUMENT_HASH_KEY: ${NAEBKA_KYC_DOCUMENT_HASH_KEY:?set NAEBKA_KYC_DOCUMENT_HASH_KEY in .env}
+      NAEBKA_CURRENCY_MODE: PLAY_MONEY
+      NAEBKA_ADMIN_USERNAME: ${NAEBKA_ADMIN_USERNAME:-admin}
+      NAEBKA_ADMIN_PASSWORD: ${NAEBKA_ADMIN_PASSWORD:?set NAEBKA_ADMIN_PASSWORD in .env}
+      # Real client IPs arrive via Caddy's X-Forwarded-For, so same-IP blocking works in production.
+      NAEBKA_POKER_BLOCK_SAME_IP: ${NAEBKA_POKER_BLOCK_SAME_IP:-true}
+      NAEBKA_DEADLOCK_API_BASE_URL: ${DEADLOCK_API_BASE_URL:-https://api.deadlock-api.com}
+      NAEBKA_DEADLOCK_BOT_BASE_URL: ${DEADLOCK_BOT_URL:-}
+      NAEBKA_DEADLOCK_BOT_TOKEN: ${DEADLOCK_BOT_TOKEN:-}
+      NAEBKA_LIVE_VIEW_MIN_STAKE_TOKENS: ${LIVE_VIEW_MIN_STAKE_TOKENS:-100}
+      NAEBKA_LIVE_VIEW_DELAY_SECONDS: ${LIVE_VIEW_DELAY_SECONDS:-5}
+      NAEBKA_ETH_CONTRACT_ADDRESS: ${NAEBKA_ETH_CONTRACT_ADDRESS:-}
+      NAEBKA_ETH_DEPLOY_BLOCK: ${NAEBKA_ETH_DEPLOY_BLOCK:-0}
+      NAEBKA_ETH_RPC_URL: ${NAEBKA_ETH_RPC_URL:-https://ethereum-sepolia-rpc.publicnode.com}
+      NAEBKA_ETH_TOKENS_PER_ETH: ${NAEBKA_ETH_TOKENS_PER_ETH:-100000}
+      NAEBKA_ETH_CONFIRMATIONS: ${NAEBKA_ETH_CONFIRMATIONS:-3}
+      NAEBKA_ETH_SIWE_DOMAIN: ${SITE_DOMAIN:-poker.naebka.win}
+      NAEBKA_ETH_SIWE_URI: https://${SITE_DOMAIN:-poker.naebka.win}
+      NAEBKA_ETH_OPERATOR_KEY: ${NAEBKA_ETH_OPERATOR_KEY:-}
+      NAEBKA_ETH_MAX_FEE_GWEI: ${NAEBKA_ETH_MAX_FEE_GWEI:-50}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    mem_limit: 640m
+
+  watcher:
+    image: *live-image
+    restart: unless-stopped
+    command: ["python", "-m", "naebka_live.watcher"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DEADLOCK_API_BASE_URL: ${DEADLOCK_API_BASE_URL:-https://api.deadlock-api.com}
+      DEADLOCK_BOT_URL: ${DEADLOCK_BOT_URL:-}
+      DEADLOCK_BOT_TOKEN: ${DEADLOCK_BOT_TOKEN:-}
+      WATCHER_MAX_TRACKED: ${WATCHER_MAX_TRACKED:-8}
+      WATCHER_POLL_SECONDS: ${WATCHER_POLL_SECONDS:-10}
+    depends_on:
+      redis: { condition: service_healthy }
+    mem_limit: 128m
+
+  odds-engine:
+    image: *live-image
+    restart: unless-stopped
+    command: ["python", "-m", "naebka_live.odds_engine"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      ODDS_MARGIN: ${ODDS_MARGIN:-0.06}
+    depends_on:
+      redis: { condition: service_healthy }
+    mem_limit: 96m
+
+  # Reverse proxy + automatic HTTPS (Let's Encrypt) for SITE_DOMAIN. Proxies WebSockets (/ws) out of the box.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:-poker.naebka.win}
+      SERVER_IP: ${SERVER_IP:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [core]
+    mem_limit: 96m
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
