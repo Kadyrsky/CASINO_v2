@@ -151,7 +151,9 @@ export function SoundSettings() {
         <Volume value={s().musicVolume} onInput={sounds.setMusicVolume} disabled={!s().musicOn || s().muted} label="Music volume" />
         <Show
           when={!noMusic()}
-          fallback={<p class="text-xs text-ink-400">The music files aren’t installed on this server (frontend/scripts/wiki_music.py).</p>}
+          fallback={
+            <p class="text-xs text-ink-400">This server has no music files yet (see “No music?” in the README).</p>
+          }
         >
           <div class="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Music station">
             <For each={music.variants}>

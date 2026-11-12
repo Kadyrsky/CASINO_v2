@@ -128,8 +128,8 @@ then decide.
 
 Before:
 
-* `docker compose up --build`. The core image fetches the music (`frontend/scripts/wiki_music.py`); check
-  <http://localhost:8080/music/manifest.json> lists 36 files. Without them the site works, just without music.
+* Check <https://poker.naebka.win/music/manifest.json> lists 36 files. Without music the music experiment has
+  nothing to compare: upload it to the server once (deploy/README.md, "Music").
 * Test everything with `?ab=` in the address (for example `?ab=theme:archmother`) so your own clicks aren't counted.
   The taste test opens from Customize or the footer link "Pick your style" (it doesn't pop up by itself with `?ab=`).
 * Optional: start from empty tables, so earlier tries don't count (this deletes all A/B data and feedback):

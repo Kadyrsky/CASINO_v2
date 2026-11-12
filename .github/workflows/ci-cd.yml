@@ -89,6 +89,9 @@ jobs:
         with:
           context: .
           file: core/Dockerfile
+          # deadlock.wiki refuses GitHub's runners (HTTP 403), so the image is built without music; the server keeps
+          # it in /opt/naebka/music (deploy/README.md, "Music"). It also keeps Valve's audio out of the public image.
+          build-args: MUSIC=skip
           push: true
           tags: ${{ env.IMAGE_PREFIX }}-core:${{ github.sha }},${{ env.IMAGE_PREFIX }}-core:latest
           cache-from: type=gha,scope=core
