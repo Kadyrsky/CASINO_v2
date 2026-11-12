@@ -7,6 +7,7 @@ import { auth } from '../lib/auth';
 import { betslip } from '../lib/betslip';
 import { ab } from '../lib/experiments';
 import { appConfig, fiat, odds, tokens } from '../lib/format';
+import { sounds } from '../lib/sounds';
 import { wallet } from '../lib/wallet';
 import { suspendLabel } from './match';
 import { toast } from './toast';
@@ -61,6 +62,7 @@ export function BetSlip(props: { match?: Match }) {
     try {
       const bet = await post<Bet>('/api/bets', { selectionId: p.selection.id, stakeTokens: stakeNum(), expectedOdds: seenOdds(), acceptHigherOdds: acceptHigher() }, idempotencyKey);
       ab.track('bet_placed');
+      sounds.play('bet');
       toast.success(`Bet placed: ${tokens(bet.stake)} on ${bet.selectionName} @ ${odds(bet.odds)}`);
       setSeenOdds(bet.odds);
       idempotencyKey = newIdempotencyKey();
@@ -68,6 +70,7 @@ export function BetSlip(props: { match?: Match }) {
       void wallet.refresh();
     } catch (e) {
       idempotencyKey = newIdempotencyKey();
+      sounds.play(e instanceof ApiError && e.code === 'PRICE_CHANGED' ? 'notify' : 'error');
       if (e instanceof ApiError && e.code === 'PRICE_CHANGED') {
         const current = e.extra.currentOdds as number | undefined;
         setNotice({ tone: 'warn', text: `The price moved to ${odds(current)}. Review and confirm the new odds.` });

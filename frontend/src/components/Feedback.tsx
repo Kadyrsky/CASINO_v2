@@ -2,25 +2,20 @@
  * Site feedback, docked in the corner instead of a pop-up: there is no dark overlay, so people can keep using and
  * looking at the site while they write, and the draft is kept while they move between pages. It can be minimised to
  * a small tab. The page, the screen size and the A/B versions go along with it, so
- * the admin dashboard can compare feedback between versions.
+ * the admin dashboard can compare feedback between versions. Most people never open it: the taste test and the
+ * one-tap rating (QuickRating.tsx) ask at the right moment instead; this is for those with more to say.
  */
 import { useLocation } from '@solidjs/router';
 import { createEffect, createRoot, createSignal, For, Show } from 'solid-js';
 import { post } from '../api/client';
 import { ab } from '../lib/experiments';
 import { customize, feedbackPanel } from '../lib/panels';
+import { prompts } from '../lib/prompts';
+import { FACES as RATINGS, TagChips, tagsFor } from './QuickRating';
 import { toast } from './toast';
 import { Button } from './ui';
 
 type Category = 'ui' | 'bug' | 'idea' | 'other';
-
-const RATINGS = [
-  { value: 1, face: '😞', label: 'Bad' },
-  { value: 2, face: '🙁', label: 'Poor' },
-  { value: 3, face: '😐', label: 'Okay' },
-  { value: 4, face: '🙂', label: 'Good' },
-  { value: 5, face: '😍', label: 'Great' },
-];
 
 const CATEGORIES: { value: Category; label: string }[] = [
   { value: 'ui', label: 'Look & feel' },
@@ -36,7 +31,8 @@ const draft = createRoot(() => {
   const [rating, setRating] = createSignal<number | null>(null);
   const [category, setCategory] = createSignal<Category>('ui');
   const [message, setMessage] = createSignal('');
-  return { rating, setRating, category, setCategory, message, setMessage };
+  const [tags, setTags] = createSignal<string[]>([]);
+  return { rating, setRating, category, setCategory, message, setMessage, tags, setTags };
 });
 
 const hasDraft = () => draft.rating() != null || draft.message().trim() !== '';
@@ -57,10 +53,14 @@ function Panel() {
         path: location.pathname.slice(0, 200),
         variants: ab.snapshot(),
         viewport: `${window.innerWidth}x${window.innerHeight}`,
+        source: 'button',
+        tags: draft.tags().filter((t) => tagsFor(draft.rating()).includes(t)),
       });
       toast.success('Thanks! Your feedback was sent.');
+      prompts.rated();
       draft.setRating(null);
       draft.setMessage('');
+      draft.setTags([]);
       feedbackPanel.close();
     } catch (e) {
       toast.error(e);
@@ -116,6 +116,13 @@ function Panel() {
             )}
           </For>
         </div>
+        <Show when={draft.rating() != null}>
+          <TagChips
+            tags={tagsFor(draft.rating())}
+            selected={draft.tags()}
+            onToggle={(t) => draft.setTags(draft.tags().includes(t) ? draft.tags().filter((x) => x !== t) : [...draft.tags(), t])}
+          />
+        </Show>
         <div class="flex flex-wrap gap-1.5" role="radiogroup" aria-label="What is it about?">
           <For each={CATEGORIES}>
             {(c) => (
@@ -148,7 +155,7 @@ function Panel() {
         </label>
         <p class="text-[11px] text-ink-500">
           Sent with: this page ({location.pathname}), your screen size and your look.{' '}
-          <button class="font-semibold text-gold-300 hover:underline" onClick={customize.show}>Change the look</button>
+          <button class="font-semibold text-gold-300 hover:underline" onClick={() => customize.show('look')}>Change the look</button>
         </p>
       </div>
       <footer class="flex items-center justify-end gap-2 border-t border-ink-700 px-4 py-2.5">

@@ -1,6 +1,7 @@
 import { createRoot, createSignal, For } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import { ApiError } from '../api/client';
+import { sounds } from '../lib/sounds';
 
 type Kind = 'info' | 'success' | 'error';
 
@@ -21,10 +22,20 @@ const store = createRoot(() => {
   return { items, push, dismiss: (id: number) => setItems((t) => t.filter((x) => x.id !== id)) };
 });
 
+// A toast that announces a game sound (a win, a bet) stays quiet, so the two don't stack.
 export const toast = {
-  info: (t: string) => store.push('info', t),
-  success: (t: string) => store.push('success', t),
-  error: (e: unknown) => store.push('error', e instanceof ApiError || e instanceof Error ? e.message : String(e)),
+  info: (t: string) => {
+    sounds.play('notify', 0, { quietFor: 500 });
+    store.push('info', t);
+  },
+  success: (t: string) => {
+    sounds.play('success', 0, { quietFor: 500 });
+    store.push('success', t);
+  },
+  error: (e: unknown) => {
+    sounds.play('error', 0, { quietFor: 500 });
+    store.push('error', e instanceof ApiError || e instanceof Error ? e.message : String(e));
+  },
 };
 
 const styles: Record<Kind, string> = {

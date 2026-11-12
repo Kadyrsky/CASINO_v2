@@ -1,6 +1,5 @@
-/** Open/closed state of the Customize drop-down and the Feedback panel, so any page or link can open them. */
+/** Open/closed state of the Customize drop-down, the Feedback panel and the taste test, so any page can open them. */
 import { createRoot, createSignal } from 'solid-js';
-import { ab } from './experiments';
 
 const HINT_KEY = 'naebka.ab.hintSeen';
 
@@ -14,30 +13,31 @@ function hintSeen(): boolean {
 
 export const customize = createRoot(() => {
   const [open, setOpen] = createSignal(false);
-  const [hint, setHint] = createSignal(false);
+  // A dot on the Customize button until it has been opened once.
+  const [hint, setHint] = createSignal(!hintSeen());
+  const [tab, setTab] = createSignal<'look' | 'sound'>('look');
   const dismissHint = () => {
     setHint(false);
     try {
       localStorage.setItem(HINT_KEY, '1');
     } catch {
-      // storage blocked: the hint may show again next visit
+      // storage blocked: the dot may show again next visit
     }
   };
   return {
     open,
     hint,
-    show: () => {
+    tab,
+    setTab,
+    show: (on: 'look' | 'sound' = tab()) => {
       dismissHint();
+      setTab(on);
       setOpen(true);
     },
     close: () => setOpen(false),
     toggle: () => {
       dismissHint();
       setOpen(!open());
-    },
-    /** Shows the first-visit hint, unless it was seen before or versions are forced for testing. */
-    maybeHint: () => {
-      if (!hintSeen() && !ab.testing) setHint(true);
     },
     dismissHint,
   };
@@ -55,5 +55,18 @@ export const feedbackPanel = createRoot(() => {
     },
     close: () => setOpen(false),
     setMinimized,
+  };
+});
+
+/** The taste test ("which do you like more?"), see TasteTest.tsx. */
+export const tasteTest = createRoot(() => {
+  const [open, setOpen] = createSignal(false);
+  return {
+    open,
+    show: () => {
+      customize.close();
+      setOpen(true);
+    },
+    close: () => setOpen(false),
   };
 });

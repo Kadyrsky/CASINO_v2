@@ -98,7 +98,134 @@ class AbIT extends IntegrationTestBase {
                 "password", "password123", "dateOfBirth", "1990-01-01", "country", "CZ"), String.class);
         String player = token(name, "password123");
         assertThat(call(HttpMethod.GET, "/api/admin/ab/results", null, player).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(call(HttpMethod.GET, "/api/admin/ab/votes", null, player).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(call(HttpMethod.GET, "/api/admin/ab/visitors", null, player).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(call(HttpMethod.GET, "/api/admin/feedback", null, null).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    void tasteTestAnswersAreStoredOncePerPairAndShownToAdmins() {
+        String exp = "taste_" + UUID.randomUUID().toString().substring(0, 8);
+        UUID visitor = UUID.randomUUID();
+        // Shown as (zeta, alpha): stored as the pair (alpha, zeta) with zeta on the left.
+        assertThat(call(HttpMethod.POST, "/api/ab/votes", Map.of("visitorId", visitor, "experiment", exp, "left", "zeta",
+                "right", "alpha", "winner", "zeta", "previewedBoth", true, "decisionMs", 4200), null).getStatusCode())
+                .isEqualTo(HttpStatus.NO_CONTENT);
+        // Answering the same pair again (sides swapped) replaces the answer instead of counting twice.
+        call(HttpMethod.POST, "/api/ab/votes", Map.of("visitorId", visitor, "experiment", exp, "left", "alpha",
+                "right", "zeta", "winner", "alpha", "previewedBoth", true, "decisionMs", 3100), null);
+        // "No preference" has no winner.
+        Map<String, Object> tie = new java.util.HashMap<>(Map.of("visitorId", UUID.randomUUID(), "experiment", exp,
+                "left", "alpha", "right", "beta", "previewedBoth", false));
+        assertThat(call(HttpMethod.POST, "/api/ab/votes", tie, null).getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        // The winner has to be one of the two.
+        assertThat(call(HttpMethod.POST, "/api/ab/votes", Map.of("visitorId", visitor, "experiment", exp, "left", "alpha",
+                "right", "beta", "winner", "gamma", "previewedBoth", true), null).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(call(HttpMethod.POST, "/api/ab/votes", Map.of("visitorId", visitor, "experiment", exp, "left", "alpha",
+                "right", "alpha", "winner", "alpha", "previewedBoth", true), null).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+
+        String admin = token("admin", "admin12345");
+        List<JsonNode> mine = new java.util.ArrayList<>();
+        Json.read(call(HttpMethod.GET, "/api/admin/ab/votes", null, admin).getBody()).forEach(v -> {
+            if (v.path("experiment").asText().equals(exp)) {
+                mine.add(v);
+            }
+        });
+        assertThat(mine).hasSize(2);
+        JsonNode answer = mine.stream().filter(v -> v.path("variantB").asText().equals("zeta")).findFirst().orElseThrow();
+        assertThat(answer.path("variantA").asText()).isEqualTo("alpha");
+        assertThat(answer.path("left").asText()).isEqualTo("alpha");
+        assertThat(answer.path("winner").asText()).isEqualTo("alpha");
+        assertThat(answer.path("decisionMs").asInt()).isEqualTo(3100);
+        JsonNode noPreference = mine.stream().filter(v -> v.path("variantB").asText().equals("beta")).findFirst().orElseThrow();
+        assertThat(noPreference.path("winner").isMissingNode() || noPreference.path("winner").isNull()).isTrue();
+        assertThat(noPreference.path("previewedBoth").asBoolean()).isFalse();
+    }
+
+    @Test
+    void tasteTestPicksAreNotCountedAsSwitchingAway() {
+        String exp = "src_" + UUID.randomUUID().toString().substring(0, 8);
+        UUID byHand = UUID.randomUUID();
+        UUID inTest = UUID.randomUUID();
+        for (UUID v : List.of(byHand, inTest)) {
+            call(HttpMethod.POST, "/api/ab/assignments", Map.of("visitorId", v,
+                    "assignments", List.of(Map.of("experiment", exp, "assigned", "a", "current", "a"))), null);
+        }
+        call(HttpMethod.POST, "/api/ab/switches", Map.of("visitorId", byHand, "experiment", exp, "assigned", "a",
+                "from", "a", "to", "b", "source", "customize"), null);
+        call(HttpMethod.POST, "/api/ab/switches", Map.of("visitorId", inTest, "experiment", exp, "assigned", "a",
+                "from", "a", "to", "b", "source", "taste_test"), null);
+        assertThat(call(HttpMethod.POST, "/api/ab/switches", Map.of("visitorId", inTest, "experiment", exp, "assigned", "a",
+                "from", "b", "to", "a", "source", "elsewhere"), null).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+
+        String admin = token("admin", "admin12345");
+        JsonNode a = variant(Json.read(call(HttpMethod.GET, "/api/admin/ab/results", null, admin).getBody()), exp, "a");
+        assertThat(a.path("visitors").asLong()).isEqualTo(2);
+        assertThat(a.path("switchedAway").asLong()).isEqualTo(1);
+        assertThat(a.path("pickedInTasteTest").asLong()).isEqualTo(1);
+
+        JsonNode rows = Json.read(call(HttpMethod.GET, "/api/admin/ab/visitors", null, admin).getBody());
+        JsonNode row = null;
+        for (JsonNode r : rows) {
+            if (r.path("visitorId").asText().equals(byHand.toString())) {
+                row = r;
+            }
+        }
+        assertThat(row).isNotNull();
+        assertThat(row.path("assigned").path(exp).asText()).isEqualTo("a");
+        assertThat(row.path("current").path(exp).asText()).isEqualTo("b");
+        assertThat(row.path("switchesByHand").asLong()).isEqualTo(1);
+    }
+
+    @Test
+    void aOneTapRatingCanGetReasonsAddedByTheSameVisitorOnly() {
+        UUID visitor = UUID.randomUUID();
+        var created = call(HttpMethod.POST, "/api/feedback", Map.of("visitorId", visitor, "rating", 4, "category", "general",
+                "path", "/slots", "source", "pulse", "variants", Map.of("music", "lounge")), null);
+        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        long id = Json.read(created.getBody()).path("id").asLong();
+        assertThat(id).isPositive();
+
+        // Someone else can't add to it, and unknown tags are refused.
+        assertThat(call(HttpMethod.POST, "/api/feedback/" + id + "/details", Map.of("visitorId", UUID.randomUUID(),
+                "tags", List.of("love_music")), null).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(call(HttpMethod.POST, "/api/feedback/" + id + "/details", Map.of("visitorId", visitor,
+                "tags", List.of("<b>")), null).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(call(HttpMethod.POST, "/api/feedback/" + id + "/details", Map.of("visitorId", visitor,
+                "tags", List.of("love_music", "looks_great"), "message", "The lounge music fits"), null).getStatusCode())
+                .isEqualTo(HttpStatus.NO_CONTENT);
+
+        String admin = token("admin", "admin12345");
+        JsonNode list = Json.read(call(HttpMethod.GET, "/api/admin/feedback?experiment=music&variant=lounge", null, admin).getBody());
+        JsonNode mine = null;
+        for (JsonNode f : list) {
+            if (f.path("id").asLong() == id) {
+                mine = f;
+            }
+        }
+        assertThat(mine).isNotNull();
+        assertThat(mine.path("source").asText()).isEqualTo("pulse");
+        assertThat(mine.path("category").asText()).isEqualTo("general");
+        assertThat(mine.path("message").asText()).isEqualTo("The lounge music fits");
+        assertThat(List.of(mine.path("tags").get(0).asText(), mine.path("tags").get(1).asText()))
+                .containsExactlyInAnyOrder("love_music", "looks_great");
+    }
+
+    @Test
+    void oneClassroomOnOneAddressIsNotRateLimitedAsOneVisitor() {
+        // 30 visitors behind the same address (a school network) each send a rating: all of them count.
+        for (int i = 0; i < 30; i++) {
+            assertThat(call(HttpMethod.POST, "/api/feedback", Map.of("visitorId", UUID.randomUUID(), "rating", 5,
+                    "category", "general", "path", "/", "source", "pulse"), null).getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        }
+        // One visitor sending many is still stopped.
+        UUID spammer = UUID.randomUUID();
+        int last = 0;
+        for (int i = 0; i < 8; i++) {
+            last = call(HttpMethod.POST, "/api/feedback", Map.of("visitorId", spammer, "rating", 1,
+                    "category", "general", "path", "/"), null).getStatusCode().value();
+        }
+        assertThat(last).isEqualTo(HttpStatus.TOO_MANY_REQUESTS.value());
     }
 
     @Test

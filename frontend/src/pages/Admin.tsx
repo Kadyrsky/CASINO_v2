@@ -3,7 +3,7 @@ import { createQuery, useQueryClient } from '@tanstack/solid-query';
 import { createSignal, For, Show } from 'solid-js';
 import { get, post } from '../api/client';
 import type { KycSubmission, Match } from '../api/types';
-import { ExperimentsCard, FeedbackCard } from '../components/adminAb';
+import { ExperimentsCard, FeedbackCard, RecommendationCard, TasteTestCard } from '../components/adminAb';
 import { KycChecks } from '../components/kyc';
 import { toast } from '../components/toast';
 import { Badge, Button, Card, Empty, Input, PageHeader, Stat } from '../components/ui';
@@ -177,6 +177,8 @@ export default function Admin() {
           </ul>
         </Show>
       </Card>
+      <RecommendationCard />
+      <TasteTestCard />
       <ExperimentsCard />
       <FeedbackCard />
     </div>
