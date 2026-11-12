@@ -349,11 +349,28 @@ the same level (`LEVELS` in `soundPacks.ts`), so in the taste test nothing wins 
 * **Defaults:** music on at 50%, effects at 70% (`AUDIO_DEFAULTS` in `frontend/src/lib/audio.ts`). Browsers only allow
   sound after the first click or key press, so nothing plays before that. Music pauses while the tab is hidden.
 * **Silencing a button:** add `data-sound="none"` (or an event name, like `data-sound="bet"`) to it or a container.
-* **The music files are Valve's**, so they aren't in git. The core's Docker build fetches them
-  (`frontend/scripts/wiki_music.py`, standard library only, 36 files, ~37 MB); for `vp dev` run
-  `python frontend/scripts/wiki_music.py` once. `/music/manifest.json` lists what the server has, and the site only
-  offers that, so without the files it simply has no music. Treat them like the wiki's icons: fine for a class
-  project, but check Valve's terms before any public or commercial use.
+* **The music files are Valve's**, so they aren't in git. `frontend/scripts/wiki_music.py` (standard library only)
+  downloads them into `frontend/public/music` (36 files, ~37 MB). The core's Docker build uses the files already
+  there and downloads only what's missing; for `vp dev` run the script once. `/music/manifest.json` lists what the
+  server has, and the site only offers that. Treat the files like the wiki's icons: fine for a class project, but
+  check Valve's terms before any public or commercial use.
+
+### No music?
+
+*Customize > Sound* says "This server has no music files yet", or <http://localhost:8080/music/manifest.json> lists
+fewer than 36 files:
+
+1. **Rebuild the image.** `docker compose up` alone keeps running the old image:
+   `docker compose up --build -d`. The build prints `wiki_music: 36/36 files`.
+2. **If the build stops with "music tracks missing"**, that machine couldn't download from <https://deadlock.wiki>
+   (network, firewall, or the wiki's Cloudflare refusing a server's address). Run the build again, or copy the folder
+   `frontend/public/music` from a teammate who has it (or run `python frontend/scripts/wiki_music.py` on a machine
+   that can open the wiki), then build again: the build uses those files and downloads nothing. To build without
+   music for now, set `NAEBKA_MUSIC=skip` in `.env`.
+3. **With `vp dev`** (no Docker), run `python frontend/scripts/wiki_music.py` once and reload the page.
+4. **On the production server** (poker.naebka.win) the images come from GitHub Actions, built without music
+   (deadlock.wiki refuses GitHub's runners), and the server serves the music from `/opt/naebka/music`. Upload it once:
+   see "Music" in [deploy/README.md](deploy/README.md).
 
 ## A/B tests and feedback
 

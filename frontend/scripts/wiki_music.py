@@ -1,19 +1,20 @@
 """Downloads Deadlock's music and stingers from the Deadlock Wiki (https://deadlock.wiki/Music) for the site's
 music player and the Deadlock sound pack.
 
-    python scripts/wiki_music.py              (from frontend/; standard library only)
-    python scripts/wiki_music.py --out DIR    (the core's Docker build uses this)
+    python frontend/scripts/wiki_music.py              (standard library only; for `vp dev`)
+    python frontend/scripts/wiki_music.py --out DIR    (the core's Docker build uses this, with --require)
 
 Writes public/music/<slug>.mp3 and public/music/manifest.json ({slug: {"duration": seconds, "bytes": n, "lufs": x}}).
-The frontend (src/lib/musicCatalog.ts) only offers what the manifest lists, so a failed or partial download leaves the
-site working, just with less music.
+The frontend (src/lib/musicCatalog.ts) only offers what the manifest lists.
+
+Files already in the folder are kept, so the music can also be copied in by hand (from a teammate, or from a machine
+that can reach the wiki): the script picks the MP3s up even without their manifest and only downloads what's missing.
 
 The tracks differ in loudness by up to 25 dB (the hotel's record is mixed far quieter than the title theme). If ffmpeg
 is installed (the Docker build installs it), each file's integrated loudness (EBU R128, in LUFS) goes into the
 manifest and the player evens them out, so in the taste test no station wins just by being louder.
 
-The audio is Valve's, as hosted by the wiki. It is not committed to git (see .gitignore): the core's Docker build
-fetches it, and developers run this script once for `vp dev`.
+The audio is Valve's, as hosted by the wiki. It is not committed to git (see .gitignore).
 """
 import argparse
 import json
@@ -22,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -31,8 +33,8 @@ UA = {'User-Agent': 'naebka-music/1.0 (student project; one-off music import)'}
 ROOT = Path(__file__).resolve().parent.parent
 
 # slug -> wiki file. Keep the slugs in sync with src/lib/musicCatalog.ts.
-FILES = {
-    # Background music (stations)
+# Background music (the stations): the music experiment needs all of them.
+TRACKS = {
     'hotel': 'Hotel music.mp3',
     'curio': 'Curio music.mp3',
     'waltz': 'Waltz.mp3',
@@ -47,7 +49,9 @@ FILES = {
     'rift': 'Music koth capture 160bpm.mp3',
     'urn': 'Music idol carry lp 141bpm.mp3',
     'core': 'Music core exposed lp.mp3',
-    # Stingers (the Deadlock sound pack)
+}
+# Stingers (the Deadlock sound pack): a missing one is played by its synthesized stand-in.
+STINGERS = {
     **{f'ks-{n:02d}': f'Music stinger ks {n:02d}.mp3' for n in range(1, 11)},
     'first-blood': 'Music stinger first blood.mp3',
     'urn-arrived': 'Music idol announce.mp3',
@@ -62,6 +66,13 @@ FILES = {
     'king-intro': 'Music match intro king 160bpm.mp3',
     'mother-intro': 'Music match intro mother 160bpm.mp3',
 }
+FILES = {**TRACKS, **STINGERS}
+
+HOW_TO_FIX = """wiki_music: how to get the music:
+  - try again: a network hiccup is the usual cause (the next build retries, a failed step isn't cached);
+  - or copy the folder frontend/public/music from a teammate who has it (or run
+    `python frontend/scripts/wiki_music.py` on a machine that can open https://deadlock.wiki), then build again;
+  - or build without fetching music: NAEBKA_MUSIC=skip docker compose up --build"""
 
 # MPEG audio frame tables (Layer III only), for the duration.
 BITRATES = {1: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
@@ -110,14 +121,29 @@ def loudness(path: Path) -> float | None:
     return float(found[-1]) if found else None
 
 
+def get(url: str, timeout: int) -> bytes:
+    """GET with three tries, waiting a little longer each time, for the errors that tend to go away by themselves."""
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code not in (408, 425, 429, 500, 502, 503, 504) or attempt == 2:
+                raise
+        except OSError:
+            if attempt == 2:
+                raise
+        time.sleep(2 * (attempt + 1))
+    raise AssertionError('unreachable')
+
+
 def file_urls(titles):
     urls = {}
     titles = list(titles)
     for i in range(0, len(titles), 40):
         q = urllib.parse.urlencode({'action': 'query', 'format': 'json', 'formatversion': '2', 'prop': 'imageinfo',
                                     'iiprop': 'url', 'titles': '|'.join('File:' + t for t in titles[i:i + 40])})
-        with urllib.request.urlopen(urllib.request.Request(f'{API}?{q}', headers=UA), timeout=60) as r:
-            pages = json.load(r)['query']['pages']
+        pages = json.loads(get(f'{API}?{q}', 60))['query']['pages']
         # The API reports titles with underscores turned into spaces and the first letter upper-cased.
         asked = {t.replace('_', ' ').lower(): t for t in titles[i:i + 40]}
         for p in pages:
@@ -130,39 +156,53 @@ def file_urls(titles):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--out', type=Path, default=ROOT / 'public' / 'music')
+    parser.add_argument('--require', action='store_true',
+                        help='exit with an error (and what to do) unless every background track is there')
+    parser.add_argument('--offline', action='store_true', help="don't contact the wiki; only list the files already there")
     args = parser.parse_args()
     out: Path = args.out
     out.mkdir(parents=True, exist_ok=True)
 
     manifest_path = out / 'manifest.json'
-    manifest = json.loads(manifest_path.read_text('utf-8')) if manifest_path.exists() else {}
     try:
-        urls = file_urls(FILES.values())
-    except OSError as e:
-        print(f'wiki_music: cannot reach the wiki ({e}); keeping {len(manifest)} files already here', file=sys.stderr)
-        urls = {}
-    for slug, title in FILES.items():
+        manifest = json.loads(manifest_path.read_text('utf-8')) if manifest_path.exists() else {}
+    except ValueError:
+        manifest = {}
+    # MP3s copied in by hand (without their manifest) count as there.
+    for slug in FILES:
         dest = out / f'{slug}.mp3'
-        if dest.exists() and slug in manifest:
-            continue
-        url = urls.get(title)
-        if not url:
-            print(f'wiki_music: {title} not found on the wiki', file=sys.stderr)
-            continue
+        if slug not in manifest and dest.exists():
+            seconds = mp3_seconds(dest.read_bytes())
+            if seconds:
+                manifest[slug] = {'duration': seconds, 'bytes': dest.stat().st_size}
+
+    missing = [slug for slug in FILES if slug not in manifest or not (out / f'{slug}.mp3').exists()]
+    if missing and not args.offline:
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=120) as r:
-                data = r.read()
-        except OSError as e:
-            print(f'wiki_music: {title}: {e}', file=sys.stderr)
-            continue
-        seconds = mp3_seconds(data)
-        if not seconds:
-            print(f'wiki_music: {title} is not an MP3, skipped', file=sys.stderr)
-            continue
-        dest.write_bytes(data)
-        manifest[slug] = {'duration': seconds, 'bytes': len(data)}
-        time.sleep(0.2)  # be gentle with the wiki
-    manifest = {k: manifest[k] for k in FILES if k in manifest}
+            urls = file_urls(FILES[slug] for slug in missing)
+        except (OSError, ValueError, KeyError) as e:
+            print(f'wiki_music: cannot reach https://deadlock.wiki ({e})', file=sys.stderr)
+            urls = None
+        for slug in missing if urls is not None else []:
+            title = FILES[slug]
+            url = urls.get(title)
+            if not url:
+                print(f'wiki_music: {title} is no longer on the wiki', file=sys.stderr)
+                continue
+            try:
+                data = get(url, 120)
+            except OSError as e:
+                print(f'wiki_music: {title}: {e}', file=sys.stderr)
+                continue
+            seconds = mp3_seconds(data)
+            if not seconds:
+                print(f'wiki_music: {title} is not an MP3, skipped', file=sys.stderr)
+                continue
+            (out / f'{slug}.mp3').write_bytes(data)
+            manifest[slug] = {'duration': seconds, 'bytes': len(data)}
+            time.sleep(0.2)  # be gentle with the wiki
+
+    manifest = {k: manifest[k] for k in FILES if k in manifest and (out / f'{k}.mp3').exists()}
     for slug, info in manifest.items():
         if 'lufs' not in info:
             lufs = loudness(out / f'{slug}.mp3')
@@ -172,7 +212,19 @@ def main():
     total = sum(m['bytes'] for m in manifest.values()) / 1e6
     measured = sum('lufs' in m for m in manifest.values())
     print(f'wiki_music: {len(manifest)}/{len(FILES)} files in {out} ({total:.1f} MB), loudness measured for {measured}'
-          + ('' if measured else ' (install ffmpeg to measure it)'))
+          + ('' if measured or not manifest else ' (install ffmpeg to measure it)'))
+
+    tracks_missing = [slug for slug in TRACKS if slug not in manifest]
+    stingers_missing = [slug for slug in STINGERS if slug not in manifest]
+    if stingers_missing:
+        print(f'wiki_music: {len(stingers_missing)} stingers missing (their synthesized sounds play instead): '
+              + ', '.join(stingers_missing), file=sys.stderr)
+    if tracks_missing:
+        print(f'wiki_music: {len(tracks_missing)} of {len(TRACKS)} music tracks missing: ' + ', '.join(tracks_missing),
+              file=sys.stderr)
+        if args.require:
+            print(HOW_TO_FIX, file=sys.stderr)
+            sys.exit(2)
 
 
 if __name__ == '__main__':
