@@ -19,9 +19,7 @@
 	reverse_proxy core:8081
 }
 
-# Plain-HTTP access by the server's IP, for checking the deployment before DNS is set up.
-# (MetaMask sign-in expects the domain, so use the domain for real play.)
+# The site is served only on the domain: visits by the server's IP are sent there.
 http://{$SERVER_IP} {
-	encode zstd gzip
-	reverse_proxy core:8081
+	redir https://{$SITE_DOMAIN}{uri} permanent
 }

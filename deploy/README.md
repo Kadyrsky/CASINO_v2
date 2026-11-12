@@ -57,8 +57,8 @@ during each deploy, so no registry secret is needed.
 ## DNS
 
 Add an **A record** `poker` → server IP in the `naebka.win` zone (if it's on Cloudflare, use *DNS only*/grey cloud, at
-least until the first certificate is issued). Caddy picks it up automatically. Before that, the site
-answers on `http://<server ip>`.
+least until the first certificate is issued). Caddy picks it up automatically. The site is served only on
+the domain; `http://<server ip>` redirects to `https://poker.naebka.win`.
 
 ## Day-to-day
 
