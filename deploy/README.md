@@ -54,11 +54,23 @@ Settings → Secrets and variables → Actions → *New repository secret*:
 The images go to GHCR with the workflow's own `GITHUB_TOKEN`; the server logs in with the same short-lived token
 during each deploy, so no registry secret is needed.
 
-## DNS
+## DNS (Cloudflare)
 
-Add an **A record** `poker` → server IP in the `naebka.win` zone (if it's on Cloudflare, use *DNS only*/grey cloud, at
-least until the first certificate is issued). Caddy picks it up automatically. Before that, the site
-answers on `http://<server ip>`.
+`poker.naebka.win` is a Cloudflare record pointing to the server IP, **proxied** (orange cloud):
+
+- SSL/TLS mode must be **Full** or **Full (strict)** — *Flexible* would loop, because the origin redirects HTTP to HTTPS.
+- The origin keeps its own Let's Encrypt certificate (Caddy renews it with the HTTP challenge, which Cloudflare passes
+  through), so *Full (strict)* works.
+- Caddy trusts `CF-Connecting-IP` only from Cloudflare's IP ranges (listed in `deploy/Caddyfile`), so the core sees
+  real visitor IPs (login lockouts, rate limits, poker same-IP blocking) and a direct visitor can't spoof one.
+- WebSockets (`/ws`) work through Cloudflare with no extra settings.
+- `http://<server ip>` redirects to `https://poker.naebka.win`.
+
+If you ever switch to *DNS only* (grey cloud), nothing needs to change.
+
+Editing `Caddyfile` on the server: overwrite it in place (`cat new > Caddyfile`, or `scp`), not with `mv` — the
+container's bind mount keeps pointing at the old file. Then:
+`docker compose -f docker-compose.prod.yml exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile`.
 
 ## Day-to-day
 

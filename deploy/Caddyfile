@@ -1,7 +1,11 @@
-# HTTPS reaches Caddy through the SNI router (deploy/haproxy.cfg) on public port 443, which prepends a PROXY
-# protocol header carrying the real client IP. Port 80 is published directly.
+# The domain is proxied by Cloudflare (orange cloud, SSL mode Full/Full strict). Visitors reach Cloudflare, Cloudflare
+# reaches this server on 443 (via the SNI router, deploy/haproxy.cfg, which prepends a PROXY protocol header) or 80.
 {
 	servers :443 {
+		# The real visitor IP: trusted only from Cloudflare's ranges (https://www.cloudflare.com/ips), so a direct
+		# visitor can't fake it with a header. Update the list if Cloudflare publishes new ranges.
+		trusted_proxies static 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+		client_ip_headers CF-Connecting-IP
 		listener_wrappers {
 			proxy_protocol {
 				timeout 5s
@@ -12,16 +16,16 @@
 	}
 }
 
-# The site. Caddy gets and renews the HTTPS certificate by itself as soon as the domain's DNS A record points here;
-# until then it keeps retrying in the background (harmless).
+# The site. Let's Encrypt certificate, obtained and renewed by Caddy (HTTP challenge, passed through by Cloudflare).
 {$SITE_DOMAIN} {
 	encode zstd gzip
-	reverse_proxy core:8081
+	reverse_proxy core:8081 {
+		# One clean value for the core (Spring reads the left-most X-Forwarded-For): the visitor's IP from above.
+		header_up X-Forwarded-For {client_ip}
+	}
 }
 
-# Plain-HTTP access by the server's IP, for checking the deployment before DNS is set up.
-# (MetaMask sign-in expects the domain, so use the domain for real play.)
+# The site is served only on the domain: visits by the server's IP are sent there.
 http://{$SERVER_IP} {
-	encode zstd gzip
-	reverse_proxy core:8081
+	redir https://{$SITE_DOMAIN}{uri} permanent
 }
