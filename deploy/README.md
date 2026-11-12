@@ -90,17 +90,6 @@ Changing a value in `.env` (e.g. enabling MetaMask deposits) takes effect after
 
 ## Music
 
-The site plays Deadlock's music from the Deadlock Wiki. The audio is Valve's, so it is in neither git nor the image:
-CI builds the core with `MUSIC=skip` (deadlock.wiki refuses GitHub's runners with HTTP 403 anyway). The core serves
-whatever is in `/opt/naebka/music`, mounted read-only. With nothing there, the site works without music, and
-*Customize > Sound* says so.
-
-Upload it once, from a computer that has the files. After `docker compose up --build` or
-`python frontend/scripts/wiki_music.py` they're in `frontend/public/music` (36 files, ~37 MB):
-
-```bash
-scp -r frontend/public/music deploy@<server ip>:/opt/naebka/
-```
-
-No restart is needed: reload the site, and <https://poker.naebka.win/music/manifest.json> lists 36 files. Deploys
-keep the folder (`server-deploy.sh` creates it and notes in the deploy log when it's empty).
+Deadlock's music is in the repository (`frontend/public/music`, ~37 MB; the repository and its images are private) and
+is built into the core image, so the server needs nothing for it. Check <https://poker.naebka.win/music/manifest.json>
+lists 36 files. The audio is Valve's: if the repository is ever made public, remove the folder from git first.

@@ -30,8 +30,8 @@ services:
       context: .
       dockerfile: core/Dockerfile
       args:
-        # fetch: Deadlock's music from deadlock.wiki (files already in frontend/public/music are used as they are);
-        # skip: only those local files. See "No music?" in the README.
+        # The music in frontend/public/music is built in. fetch: also download anything missing from deadlock.wiki;
+        # skip: never contact the wiki. See "No music?" in the README.
         MUSIC: ${NAEBKA_MUSIC:-fetch}
     restart: unless-stopped
     environment:

@@ -1,0 +1,182 @@
+{
+ "hotel": {
+  "duration": 63.9,
+  "bytes": 1019461,
+  "lufs": -32.5
+ },
+ "curio": {
+  "duration": 112.35,
+  "bytes": 3567572,
+  "lufs": -20.2
+ },
+ "waltz": {
+  "duration": 54.18,
+  "bytes": 864858,
+  "lufs": -23.7
+ },
+ "rem": {
+  "duration": 165.07,
+  "bytes": 5180428,
+  "lufs": -20.0
+ },
+ "title": {
+  "duration": 170.06,
+  "bytes": 5157354,
+  "lufs": -10.3
+ },
+ "hideout": {
+  "duration": 43.42,
+  "bytes": 1493699,
+  "lufs": -16.3
+ },
+ "postgame": {
+  "duration": 44.07,
+  "bytes": 1453925,
+  "lufs": -7.5
+ },
+ "draft": {
+  "duration": 62.59,
+  "bytes": 2017359,
+  "lufs": -8.5
+ },
+ "menu-old": {
+  "duration": 247.09,
+  "bytes": 5765383,
+  "lufs": -13.9
+ },
+ "choir": {
+  "duration": 54.54,
+  "bytes": 870801,
+  "lufs": -24.0
+ },
+ "vault": {
+  "duration": 13.22,
+  "bytes": 221696,
+  "lufs": -21.3
+ },
+ "rift": {
+  "duration": 24.06,
+  "bytes": 770065,
+  "lufs": -9.1
+ },
+ "urn": {
+  "duration": 47.73,
+  "bytes": 1526128,
+  "lufs": -16.6
+ },
+ "core": {
+  "duration": 44.93,
+  "bytes": 1483107,
+  "lufs": -13.0
+ },
+ "ks-01": {
+  "duration": 5.98,
+  "bytes": 204816,
+  "lufs": -8.8
+ },
+ "ks-02": {
+  "duration": 6.22,
+  "bytes": 207626,
+  "lufs": -9.6
+ },
+ "ks-03": {
+  "duration": 6.22,
+  "bytes": 204917,
+  "lufs": -9.5
+ },
+ "ks-04": {
+  "duration": 5.2,
+  "bytes": 173605,
+  "lufs": -8.8
+ },
+ "ks-05": {
+  "duration": 5.98,
+  "bytes": 193010,
+  "lufs": -8.4
+ },
+ "ks-06": {
+  "duration": 5.8,
+  "bytes": 192186,
+  "lufs": -8.4
+ },
+ "ks-07": {
+  "duration": 5.25,
+  "bytes": 177252,
+  "lufs": -8.5
+ },
+ "ks-08": {
+  "duration": 5.25,
+  "bytes": 173077,
+  "lufs": -8.3
+ },
+ "ks-09": {
+  "duration": 5.46,
+  "bytes": 184252,
+  "lufs": -8.4
+ },
+ "ks-10": {
+  "duration": 6.97,
+  "bytes": 236028,
+  "lufs": -8.0
+ },
+ "first-blood": {
+  "duration": 4.83,
+  "bytes": 153345,
+  "lufs": -9.2
+ },
+ "urn-arrived": {
+  "duration": 6.87,
+  "bytes": 208682,
+  "lufs": -13.4
+ },
+ "urn-delivered": {
+  "duration": 7.16,
+  "bytes": 213675,
+  "lufs": -11.7
+ },
+ "rift-announce": {
+  "duration": 7.58,
+  "bytes": 237077,
+  "lufs": -12.0
+ },
+ "rift-secured": {
+  "duration": 7.16,
+  "bytes": 206174,
+  "lufs": -9.1
+ },
+ "victory": {
+  "duration": 8.59,
+  "bytes": 269537,
+  "lufs": -6.9
+ },
+ "defeat": {
+  "duration": 7.68,
+  "bytes": 230493,
+  "lufs": -8.6
+ },
+ "rejuv-won": {
+  "duration": 8.39,
+  "bytes": 261907,
+  "lufs": -9.5
+ },
+ "rejuv-lost": {
+  "duration": 4.83,
+  "bytes": 122550,
+  "lufs": -14.1
+ },
+ "guardian-down": {
+  "duration": 3.6,
+  "bytes": 101672,
+  "lufs": -10.7
+ },
+ "king-intro": {
+  "duration": 27.06,
+  "bytes": 955746,
+  "lufs": -10.4
+ },
+ "mother-intro": {
+  "duration": 28.94,
+  "bytes": 937113,
+  "lufs": -11.6
+ }
+}

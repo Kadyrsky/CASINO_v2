@@ -17,5 +17,3 @@ contracts/artifacts/
 .coverage
 **/htmlcov/
 
-# Deadlock's music and stingers (Valve's audio): fetched by frontend/scripts/wiki_music.py, not kept in git
-frontend/public/music/

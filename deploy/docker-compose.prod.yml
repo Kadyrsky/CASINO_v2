@@ -68,9 +68,6 @@ services:
       NAEBKA_ETH_SIWE_URI: https://${SITE_DOMAIN:-poker.naebka.win}
       NAEBKA_ETH_OPERATOR_KEY: ${NAEBKA_ETH_OPERATOR_KEY:-}
       NAEBKA_ETH_MAX_FEE_GWEI: ${NAEBKA_ETH_MAX_FEE_GWEI:-50}
-    # Deadlock's music (Valve's audio, so it's in neither git nor the image): uploaded once to /opt/naebka/music, see
-    # deploy/README.md, "Music". Changes show up without a restart; an empty folder just means no music.
-    volumes: ["./music:/app/static/music:ro"]
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

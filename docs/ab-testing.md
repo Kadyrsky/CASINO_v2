@@ -128,8 +128,8 @@ then decide.
 
 Before:
 
-* Check <https://poker.naebka.win/music/manifest.json> lists 36 files. Without music the music experiment has
-  nothing to compare: upload it to the server once (deploy/README.md, "Music").
+* Check <https://poker.naebka.win/music/manifest.json> lists 36 files (the music is built into the image; without
+  it the music experiment has nothing to compare).
 * Test everything with `?ab=` in the address (for example `?ab=theme:archmother`) so your own clicks aren't counted.
   The taste test opens from Customize or the footer link "Pick your style" (it doesn't pop up by itself with `?ab=`).
 * Optional: start from empty tables, so earlier tries don't count (this deletes all A/B data and feedback):
