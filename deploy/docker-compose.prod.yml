@@ -50,6 +50,7 @@ services:
       NAEBKA_JWT_SECRET: ${NAEBKA_JWT_SECRET:?set NAEBKA_JWT_SECRET in .env}
       NAEBKA_KYC_DOCUMENT_HASH_KEY: ${NAEBKA_KYC_DOCUMENT_HASH_KEY:?set NAEBKA_KYC_DOCUMENT_HASH_KEY in .env}
       NAEBKA_CURRENCY_MODE: PLAY_MONEY
+      NAEBKA_FEEDBACK_FILE: /app/data/feedback.jsonl
       NAEBKA_ADMIN_USERNAME: ${NAEBKA_ADMIN_USERNAME:-admin}
       NAEBKA_ADMIN_PASSWORD: ${NAEBKA_ADMIN_PASSWORD:?set NAEBKA_ADMIN_PASSWORD in .env}
       # Real client IPs arrive via Caddy's X-Forwarded-For, so same-IP blocking works in production.
@@ -68,6 +69,8 @@ services:
       NAEBKA_ETH_SIWE_URI: https://${SITE_DOMAIN:-poker.naebka.win}
       NAEBKA_ETH_OPERATOR_KEY: ${NAEBKA_ETH_OPERATOR_KEY:-}
       NAEBKA_ETH_MAX_FEE_GWEI: ${NAEBKA_ETH_MAX_FEE_GWEI:-50}
+    # A second copy of all feedback on the server: /opt/naebka/data/feedback.jsonl (deploy/README.md, "Feedback file").
+    volumes: ["./data:/app/data"]
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

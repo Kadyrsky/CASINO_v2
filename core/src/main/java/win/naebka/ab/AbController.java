@@ -48,10 +48,12 @@ public class AbController {
 
     private final JdbcClient jdbc;
     private final RateLimiter rateLimiter;
+    private final FeedbackLog feedbackLog;
 
-    public AbController(JdbcClient jdbc, RateLimiter rateLimiter) {
+    public AbController(JdbcClient jdbc, RateLimiter rateLimiter, FeedbackLog feedbackLog) {
         this.jdbc = jdbc;
         this.rateLimiter = rateLimiter;
+        this.feedbackLog = feedbackLog;
     }
 
     public record Assignment(@NotNull @Pattern(regexp = NAME) String experiment,
@@ -194,6 +196,18 @@ public class AbController {
                         agent == null ? null : agent.substring(0, Math.min(agent.length(), 300)),
                         req.source() == null ? "button" : req.source(), pgArray(req.tags()))
                 .query(Long.class).single();
+        Map<String, Object> copy = new LinkedHashMap<>();
+        copy.put("visitorId", req.visitorId());
+        copy.put("userId", userIdOrNull());
+        copy.put("source", req.source() == null ? "button" : req.source());
+        copy.put("rating", req.rating());
+        copy.put("category", req.category());
+        copy.put("tags", req.tags() == null ? List.of() : req.tags());
+        copy.put("message", message);
+        copy.put("path", req.path());
+        copy.put("variants", req.variants() == null ? Map.of() : req.variants());
+        copy.put("viewport", req.viewport());
+        feedbackLog.feedback(id, copy);
         return new Created(id);
     }
 
@@ -210,6 +224,10 @@ public class AbController {
         if (updated == 0) {
             throw new Exceptions.DomainException(ErrorCode.NOT_FOUND, "No recent feedback with that id from this visitor");
         }
+        Map<String, Object> copy = new LinkedHashMap<>();
+        copy.put("tags", req.tags() == null ? List.of() : req.tags());
+        copy.put("message", message);
+        feedbackLog.details(id, copy);
     }
 
     // ---- Admin dashboard ----

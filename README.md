@@ -406,6 +406,10 @@ three kinds of evidence; the reasoning, the numbers and a **test-day checklist**
   hand or from the taste test), their goals (registered, bet placed, spun slots, sat at poker, music off, sounds off),
   their taste-test answers and their feedback. The public endpoints are rate-limited per visitor, with a looser limit
   per address, so a classroom on one network isn't throttled as one person.
+- **Feedback file:** every rating, reason and comment is also appended to `data/feedback.jsonl` on the machine running
+  Naebka (one JSON object per line; `/opt/naebka/data` on the server, see [deploy/README.md](deploy/README.md)). It is
+  a second copy for safety and for reading without the dashboard; the database stays the main one. Set by
+  `NAEBKA_FEEDBACK_FILE` in both Compose files; empty turns it off.
 - **Testing a version:** open the site with `?ab=theme:archmother,music:gothic` to force versions in that tab (`?ab=`
   clears it). Forced visits are not counted and get no prompts, so Lighthouse runs and QA don't skew the results:
   `npx lighthouse "http://localhost:8080/?ab=theme:archmother" --view`.

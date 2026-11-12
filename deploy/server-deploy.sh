@@ -23,6 +23,9 @@ if [ -n "$TOKEN" ] && [ -n "$GH_USER" ]; then
   trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
 fi
 
+# The feedback file's folder (deploy/README.md, "Feedback file"), created as this user so it can read and copy it.
+mkdir -p data
+
 "${COMPOSE[@]}" pull --quiet
 "${COMPOSE[@]}" up -d --remove-orphans
 

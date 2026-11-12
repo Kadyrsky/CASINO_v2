@@ -93,3 +93,14 @@ Changing a value in `.env` (e.g. enabling MetaMask deposits) takes effect after
 Deadlock's music is in the repository (`frontend/public/music`, ~37 MB; the repository and its images are private) and
 is built into the core image, so the server needs nothing for it. Check <https://poker.naebka.win/music/manifest.json>
 lists 36 files. The audio is Valve's: if the repository is ever made public, remove the folder from git first.
+
+## Feedback file
+
+Besides the database, every rating, reason and comment is appended to `/opt/naebka/data/feedback.jsonl` on the server:
+one JSON object per line, never rewritten, so it survives a lost database and anyone with SSH access can read it.
+`"event": "feedback"` lines are new ratings; `"event": "details"` lines add reasons or a comment to the rating with
+the same `id`. To copy it to your computer:
+
+```bash
+scp deploy@<server ip>:/opt/naebka/data/feedback.jsonl .
+```

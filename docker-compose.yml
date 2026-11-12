@@ -34,7 +34,10 @@ services:
         # skip: never contact the wiki. See "No music?" in the README.
         MUSIC: ${NAEBKA_MUSIC:-fetch}
     restart: unless-stopped
+    # A second copy of all feedback, as a file on this computer: ./data/feedback.jsonl (one JSON object per line).
+    volumes: ["./data:/app/data"]
     environment:
+      NAEBKA_FEEDBACK_FILE: /app/data/feedback.jsonl
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/naebka
       SPRING_DATASOURCE_USERNAME: naebka
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-naebka}
