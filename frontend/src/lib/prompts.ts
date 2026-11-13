@@ -4,7 +4,8 @@
  * on forms (login, wallet, verification), never two at once or right after another, each at most once per visitor,
  * and always easy to dismiss. Nothing is asked in a tab opened with ?ab= (QA).
  */
-import { createEffect, createRoot, createSignal } from 'solid-js';
+import { createEffect, createRoot, createSignal, untrack } from 'solid-js';
+import { disclaimer } from './disclaimer';
 import { ab } from './experiments';
 import { customize, feedbackPanel, tasteTest } from './panels';
 
@@ -61,7 +62,15 @@ export const prompts = createRoot(() => {
   }
 
   const quietPage = () => /^\/(admin|login|register|verification|wallet)/.test(path());
-  const busy = () => customize.open() || feedbackPanel.open() || tasteTest.open();
+  const busy = () => disclaimer.open() || customize.open() || feedbackPanel.open() || tasteTest.open();
+
+  // Accepting the first-visit notice counts as a closed prompt: the first question waits the usual gap after it.
+  let noticeWasOpen = disclaimer.open();
+  createEffect(() => {
+    const open = disclaimer.open();
+    if (noticeWasOpen && !open) lastClosed = untrack(active);
+    noticeWasOpen = open;
+  });
 
   createEffect(() => {
     const seconds = active();

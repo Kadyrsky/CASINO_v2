@@ -9,6 +9,7 @@ import { hub } from '../lib/ws';
 import { customize, feedbackPanel, tasteTest } from '../lib/panels';
 import { prompts } from '../lib/prompts';
 import { CustomizeButton } from './Appearance';
+import { Disclaimer } from './Disclaimer';
 import { FeedbackDock } from './Feedback';
 import { PulseCard } from './QuickRating';
 import { SoundButton } from './SoundControls';
@@ -196,6 +197,7 @@ export default function Layout(props: RouteSectionProps) {
         <PulseCard />
       </Show>
       <Toaster />
+      <Disclaimer />
     </div>
   );
 }
