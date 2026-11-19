@@ -50,6 +50,9 @@ services:
       NAEBKA_JWT_SECRET: ${NAEBKA_JWT_SECRET:?set NAEBKA_JWT_SECRET in .env}
       NAEBKA_KYC_DOCUMENT_HASH_KEY: ${NAEBKA_KYC_DOCUMENT_HASH_KEY:?set NAEBKA_KYC_DOCUMENT_HASH_KEY in .env}
       NAEBKA_CURRENCY_MODE: PLAY_MONEY
+      # The API docs (Swagger UI) map every endpoint for an attacker: on for local development only.
+      SPRINGDOC_API_DOCS_ENABLED: "false"
+      SPRINGDOC_SWAGGER_UI_ENABLED: "false"
       NAEBKA_FEEDBACK_FILE: /app/data/feedback.jsonl
       NAEBKA_ADMIN_USERNAME: ${NAEBKA_ADMIN_USERNAME:-admin}
       NAEBKA_ADMIN_PASSWORD: ${NAEBKA_ADMIN_PASSWORD:?set NAEBKA_ADMIN_PASSWORD in .env}

@@ -8,6 +8,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Past;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
@@ -22,6 +23,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import win.naebka.common.ErrorCode;
+import win.naebka.common.RateLimiter;
+import win.naebka.config.NaebkaProperties;
 import win.naebka.common.Exceptions.DomainException;
 
 @RestController
@@ -29,10 +32,14 @@ import win.naebka.common.Exceptions.DomainException;
 public class AuthController {
     private final AuthService auth;
     private final SessionRepository sessions;
+    private final RateLimiter rateLimiter;
+    private final NaebkaProperties props;
 
-    public AuthController(AuthService auth, SessionRepository sessions) {
+    public AuthController(AuthService auth, SessionRepository sessions, RateLimiter rateLimiter, NaebkaProperties props) {
         this.auth = auth;
         this.sessions = sessions;
+        this.rateLimiter = rateLimiter;
+        this.props = props;
     }
 
     public record RegisterRequest(
@@ -49,6 +56,7 @@ public class AuthController {
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.CREATED)
     public AuthService.TokenResponse register(@Valid @RequestBody RegisterRequest req, HttpServletRequest http) {
+        rateLimiter.hit("register-ip:" + http.getRemoteAddr(), props.auth().registrationsPerIpPerHour(), Duration.ofHours(1));
         auth.register(req.username(), req.email(), req.password(), req.dateOfBirth(), req.country());
         return auth.login(req.username(), req.password(), http.getRemoteAddr(), http.getHeader("User-Agent"));
     }

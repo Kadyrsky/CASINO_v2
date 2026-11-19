@@ -19,7 +19,9 @@ import win.naebka.auth.AuthService;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "naebka.betting.acceptance-delay-ms=0",
         "naebka.settlement.poll-seconds=3600",
-        "naebka.poker.block-same-ip=false"
+        "naebka.poker.block-same-ip=false",
+        // Tests register many accounts from one machine; RegistrationLimitIT checks the real limit
+        "naebka.auth.registrations-per-ip-per-hour=10000"
 })
 public abstract class IntegrationTestBase {
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine");

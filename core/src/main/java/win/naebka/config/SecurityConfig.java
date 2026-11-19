@@ -16,6 +16,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter.ReferrerPolicy;
+import org.springframework.security.web.header.writers.StaticHeadersWriter;
 import jakarta.servlet.http.HttpServletResponse;
 import win.naebka.auth.JwtService;
 import win.naebka.common.ErrorCode;
@@ -25,6 +27,24 @@ import win.naebka.common.Json;
 @Configuration
 @EnableMethodSecurity
 public class SecurityConfig {
+    /**
+     * Content-Security-Policy: only the site's own scripts run (the main defence if an XSS bug ever slips in, since
+     * the login token is in browser storage). Inline styles stay allowed because SolidJS sets style attributes; images
+     * may come from any HTTPS host (hero, item and rank pictures arrive in the match data); the site can't be framed.
+     */
+    static final String CSP = String.join("; ",
+            "default-src 'self'",
+            "script-src 'self'",
+            "style-src 'self' 'unsafe-inline'",
+            "img-src 'self' data: blob: https:",
+            "media-src 'self' data: blob:",
+            "font-src 'self' data:",
+            "connect-src 'self'",
+            "object-src 'none'",
+            "base-uri 'self'",
+            "form-action 'self'",
+            "frame-ancestors 'none'");
+
 
     @Bean
     PasswordEncoder passwordEncoder() {
@@ -39,6 +59,12 @@ public class SecurityConfig {
     @Bean
     SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http.csrf(c -> c.disable())
+                // Spring's defaults (nosniff, X-Frame-Options, HSTS over HTTPS) plus a CSP and two privacy headers.
+                .headers(h -> h
+                        .contentSecurityPolicy(c -> c.policyDirectives(CSP))
+                        .referrerPolicy(r -> r.policy(ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN))
+                        .addHeaderWriter(new StaticHeadersWriter("Permissions-Policy",
+                                "camera=(), microphone=(), geolocation=(), payment=(), usb=()")))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(a -> a
                         .requestMatchers(HttpMethod.POST, "/api/auth/register", "/api/auth/login", "/api/auth/steam").permitAll()
@@ -48,7 +74,7 @@ public class SecurityConfig {
                                 "/api/ab/votes", "/api/feedback", "/api/feedback/*/details").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/config", "/api/matches/**", "/api/live/**", "/api/slots/games",
                                 "/api/slots/jackpot", "/api/poker/tables/**", "/api/chat/rooms/**").permitAll()
-                        .requestMatchers("/api/docs/**", "/api/openapi.json/**", "/swagger-ui/**", "/actuator/health",
+                        .requestMatchers("/api/docs/**", "/api/openapi.json/**", "/api/swagger-ui/**", "/swagger-ui/**", "/actuator/health",
                                 "/ws/**").permitAll()
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         // The frontend (FrontendConfig): every GET/HEAD outside /api is a page or a static file.

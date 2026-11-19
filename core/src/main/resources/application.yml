@@ -61,6 +61,8 @@ naebka:
   auth:
     max-failed-logins: 5
     lockout-minutes: 15
+    # Stops bots from mass-creating accounts (each gets the signup bonus).
+    registrations-per-ip-per-hour: 10
   wallet:
     max-deposit-tokens: 10000
     signup-bonus-tokens: 1000
