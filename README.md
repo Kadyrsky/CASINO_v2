@@ -428,10 +428,10 @@ three kinds of evidence; the reasoning, the numbers and a **test-day checklist**
 ## Tests
 
 ```bash
-# Java: 76 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules,
+# Java: 78 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules,
 # deadlock-api -> Steam bot fallback, Ethereum signatures, deposit-log parsing, payout encoding and signing)
 cd core && mvn test
-# + 51 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
+# + 66 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
 cd core && mvn -Pit test
 # Coverage (JaCoCo) is written by both commands: core/target/site/jacoco/index.html
 
@@ -467,6 +467,9 @@ settle" via the scripted `MatchSimulator`):
   required.
 * Realtime map: only admins, premium players and players with a big enough bet may watch; rosters are stored with
   the match and shown with names and ranks; the directory links matches that can be bet on.
+* WebSocket (a real client against the server, fan-out through Redis): auth and presence, which topics may be
+  subscribed, replay of missed messages with `lastSeq`, delivery only after commit, the realtime-map permission.
+* Chat: messages stored and pushed live on `chat:{room}`, login needed to post, 500-character limit, rate limit.
 * HTTP: RFC 7807 errors, logout revokes the JWT, slot spin is verifiable after seed rotation, poker buy-in/cash-out.
 
 ## Where each design document lives in the code
