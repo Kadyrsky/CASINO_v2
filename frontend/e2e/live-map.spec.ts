@@ -65,6 +65,30 @@ const marker = (view: Locator, player: string) => view.locator('g', { has: view.
 /** How wide a hero's portrait is drawn: markers grow as the view zooms in. */
 const portraitWidth = async (hero: Locator) => (await hero.locator('image').first().boundingBox())!.width;
 
+test('builds: every hero has its own four abilities and different items the shop sells, with their icons and names', async ({ page }) => {
+  await openMatch(page, '2D');
+  // The match starts at 15:00 for whoever comes to watch (the mock doesn't run on for hours).
+  const clock = page.locator('div.absolute.left-3.top-3 span.font-mono');
+  await expect(clock).toHaveText(/^\d+:\d\d$/);
+  expect(Number((await clock.textContent())!.split(':')[0])).toBeLessThan(25);
+  await page.getByRole('tab', { name: 'Builds' }).click();
+  const rows = page.locator('li', { has: page.locator('img[src^="/icons/items/"]') });
+  await expect(rows).toHaveCount(PLAYERS.length);
+  for (const row of await rows.all()) {
+    const items = row.locator('div.flex-wrap img');
+    const names = await items.evaluateAll((imgs) => imgs.map((i) => i.getAttribute('title') ?? ''));
+    const icons = await items.evaluateAll((imgs) => imgs.map((i) => i.getAttribute('src') ?? ''));
+    expect(names.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(names).size, `${names}`).toBe(names.length); // no item twice
+    for (const name of names) expect(name).not.toMatch(/^upgrade_|Disabled/); // no removed items
+    for (const icon of icons) expect(icon).toMatch(/^\/icons\/items\//); // the wiki's art, every one
+    await expect(row.locator('img[alt]:not([title])')).toHaveCount(4); // four abilities
+  }
+  // Infernus's own four.
+  const infernus = await rows.filter({ hasText: 'Brass Fox' }).locator('img[alt]:not([title])').evaluateAll((imgs) => imgs.map((i) => i.getAttribute('alt')));
+  expect(infernus).toEqual(['Napalm', 'Flame Dash', 'Afterburn', 'Concussive Combustion']);
+});
+
 test('2D: every hero, the objectives, and both bridge power-ups with their kind and what it gives', async ({ page }) => {
   await openMatch(page, '2D');
   for (const player of PLAYERS) await expect(page.locator('svg title', { hasText: ` · ${player}` }).first()).toBeAttached();

@@ -256,12 +256,15 @@ def compact_assets(heroes: list[Any], ranks: list[Any], items: list[Any], world:
             }
             for r in ranks if isinstance(r, dict) and "tier" in r
         },
+        # Every upgrade, since a frame may name any; "shop" marks the ones the shop sells. The rest (about 80 of 250)
+        # are removed items, some still under internal names and with other items' art, and Street Brawl's own.
         "items": {
             str(i["id"]): {
                 "name": i.get("name"),
                 "image": i.get("shop_image_small") or i.get("image"),
                 "tier": i.get("item_tier"),
                 "slot": i.get("item_slot_type"),
+                "shop": bool(i.get("shopable")),
             }
             for i in items if isinstance(i, dict) and i.get("type") == "upgrade" and "id" in i
         },
