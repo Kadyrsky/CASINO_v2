@@ -7,29 +7,49 @@
  */
 import { A } from '@solidjs/router';
 import { createQuery } from '@tanstack/solid-query';
-import { createEffect, createMemo, createSignal, For, Index, onCleanup, Show, useContext, type JSX } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, Index, onCleanup, Show, untrack, type JSX } from 'solid-js';
 import { get } from '../api/client';
-import type { FrameEvent, FrameObjective, FramePlayer, FrameRift, FrameSinner, LiveAssets, LiveFrame, LiveMatchInfo, LivePlayer } from '../api/types';
+import type { FrameEvent, FrameSinner, LiveAssets, LiveFrame, LiveMatchInfo, LivePlayer } from '../api/types';
 import { auth } from '../lib/auth';
 import { clock, compact, tokens } from '../lib/format';
 import { RIFT_ICON, TEAM_COLOR, TEAM_NAMES, TEAM_TEXT, URN_ICON, abilityOf, heroOf, itemOf, objectiveIcon, toMap, useLiveAssets } from '../lib/live';
+import { advance, liveClock, type PlayClock } from '../lib/playback';
 import { useTopic } from '../lib/ws';
 import { HeroIcon, RankBadge, playerName } from './live';
+import { LiveMap25D, type MapLayers, type MapQuality } from './LiveMap25D';
 import { AbilityRow, CampMarker, MapScale, MidbossTimer, ObjectiveStatus, PowerupMarker, RiftCapturers, campKinds } from './liveMapLayers';
+import {
+  HeroMarker,
+  ObjectiveMarker,
+  RIFT_COLOR,
+  RiftMarker,
+  URN_COLOR,
+  UrnCarried,
+  UrnDelivery,
+  UrnMarker,
+  isGlyph,
+  objectiveColor,
+} from './liveMapMarkers';
 import { Badge, Button, Card, Spinner, Tabs } from './ui';
 
-const KEEP_FRAMES = 160; // ~80 s at 2 frames per second
+const KEEP_FRAMES = 600; // 5 minutes at 2 frames per second: how long a pause can last
 const MAX_EVENTS = 80;
+
+/** A hero's world position, and the height of its feet when the frames carry it (bots before z don't). */
+type HeroPos = [x: number, y: number, z: number | null];
 
 interface View {
   frame: LiveFrame;
   time: number;
-  pos: Map<number, [number, number]>;
+  pos: Map<number, HeroPos>;
 }
 
 function frameTime(f: LiveFrame): number {
   return f.game_time_s ?? f.tick / 64;
 }
+
+/** The value a share `t` of the way from a to b; a when b is unknown. */
+const mix = (a: number, b: number | null | undefined, t: number) => (b == null ? a : a + (b - a) * t);
 
 /** Playback of buffered frames on a game clock, with positions interpolated between neighbours. */
 function usePlayback() {
@@ -39,7 +59,7 @@ function usePlayback() {
   const [history, setHistory] = createSignal<{ t: number; nw: [number, number] }[]>([]);
   const [events, setEvents] = createSignal<FrameEvent[]>([]);
   let pending: FrameEvent[] = [];
-  let playTime: number | null = null;
+  let playClock: PlayClock = { time: null, held: false };
   let last = performance.now();
 
   const push = (f: LiveFrame) => {
@@ -56,28 +76,28 @@ function usePlayback() {
     const dt = Math.min(0.5, (now - last) / 1000);
     last = now;
     if (frames.length) {
-      const latest = frameTime(frames[frames.length - 1]!);
-      if (playTime == null || latest - playTime > 9) playTime = Math.max(frameTime(frames[0]!), latest - 3);
-      if (!paused()) playTime = Math.min(latest, playTime + dt);
-      let i = frames.findIndex((f) => frameTime(f) > playTime!);
+      playClock = advance(playClock, frameTime(frames[0]!), frameTime(frames[frames.length - 1]!), dt, paused());
+      const playTime = playClock.time!;
+      let i = frames.findIndex((f) => frameTime(f) > playTime);
       if (i < 0) i = frames.length;
       const a = frames[Math.max(0, i - 1)]!;
       const b = frames[Math.min(frames.length - 1, i)]!;
       const span = frameTime(b) - frameTime(a);
       const alpha = span > 0 ? Math.min(1, Math.max(0, (playTime - frameTime(a)) / span)) : 0;
       const next = new Map(b.players.map((p) => [p.account_id, p]));
-      const pos = new Map<number, [number, number]>();
+      const pos = new Map<number, HeroPos>();
       for (const p of a.players) {
         const q = next.get(p.account_id);
         if (p.x == null || p.y == null) continue;
-        // Don't glide across the map when a hero respawns.
+        // Don't glide across the map (or up and down) when a hero respawns.
         const jump = q?.x != null && q.y != null && Math.hypot(q.x - p.x, q.y - p.y) > 2500;
-        pos.set(p.account_id, q?.x != null && q.y != null && !jump ? [p.x + (q.x - p.x) * alpha, p.y + (q.y - p.y) * alpha] : [p.x, p.y]);
+        const t = q?.x != null && q.y != null && !jump ? alpha : 0;
+        pos.set(p.account_id, [mix(p.x, q?.x, t), mix(p.y, q?.y, t), p.z == null ? null : mix(p.z, q?.z, t)]);
       }
       // Events appear when playback reaches them, together with the map.
-      const due = pending.filter((e) => e.time_s <= playTime! + 0.01);
+      const due = pending.filter((e) => e.time_s <= playTime + 0.01);
       if (due.length) {
-        pending = pending.filter((e) => e.time_s > playTime! + 0.01);
+        pending = pending.filter((e) => e.time_s > playTime + 0.01);
         setEvents((old) => [...due.reverse(), ...old].slice(0, MAX_EVENTS));
       }
       setView({ frame: alpha < 0.5 ? a : b, time: playTime, pos });
@@ -88,7 +108,7 @@ function usePlayback() {
   onCleanup(() => cancelAnimationFrame(raf));
 
   const jumpToLive = () => {
-    if (frames.length) playTime = frameTime(frames[frames.length - 1]!) - 1;
+    if (frames.length) playClock = liveClock(frameTime(frames[frames.length - 1]!));
     setPaused(false);
   };
   const behind = () => {
@@ -98,66 +118,6 @@ function usePlayback() {
   };
   return { push, view, paused, setPaused, jumpToLive, behind, history, events, count: () => frames.length };
 }
-
-/** Radius of each objective's icon (map units; heroes are 17). */
-const OBJECTIVE_SIZE: Record<FrameObjective['kind'], number> = {
-  guardian: 12,
-  walker: 16,
-  base_guardian: 10,
-  patron: 18,
-  patron_core: 15,
-  midboss: 15,
-};
-
-/** Glyphs (patrons, Mid-Boss) sit inside the disc; the guardian and walker pictures fill it. */
-const isGlyph = (kind: FrameObjective['kind']) => kind === 'patron' || kind === 'patron_core' || kind === 'midboss';
-
-function objectiveColor(kind: FrameObjective['kind'], team: 0 | 1 | null): string {
-  return kind === 'midboss' ? '#b07cff' : team == null ? '#8a83a3' : TEAM_COLOR[team];
-}
-
-/**
- * Objectives are rounded squares, so they never look like the round hero markers. The outline is the health left,
- * running clockwise from the top left corner.
- */
-function ObjectiveMarker(props: { o: FrameObjective; at: [number, number] }) {
-  const s = () => OBJECTIVE_SIZE[props.o.kind] ?? 10;
-  const color = () => objectiveColor(props.o.kind, props.o.team);
-  const share = () => (props.o.max_hp > 0 ? Math.min(1, props.o.hp / props.o.max_hp) : 1);
-  const outer = () => s() + 4;
-  // Glyphs are a little smaller than the square, so the dark edge frames them; pictures fill it.
-  const img = () => (isGlyph(props.o.kind) ? s() * 0.8 : s());
-  const k = useContext(MapScale);
-  return (
-    <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000}) scale(${k()})`}>
-      <title>{`${props.o.kind.replace('_', ' ')} · ${Math.round(share() * 100)}%`}</title>
-      <rect x={-outer()} y={-outer()} width={outer() * 2} height={outer() * 2} rx={outer() * 0.35} fill="#0b0a10" stroke="rgb(0 0 0 / 0.5)" stroke-width="3" />
-      <rect
-        x={-outer()}
-        y={-outer()}
-        width={outer() * 2}
-        height={outer() * 2}
-        rx={outer() * 0.35}
-        fill="none"
-        stroke={color()}
-        stroke-width="3"
-        pathLength="100"
-        stroke-dasharray={`${share() * 100} 100`}
-      />
-      <Show
-        when={objectiveIcon(props.o.kind, props.o.team)}
-        fallback={<rect x={-s() / 2} y={-s() / 2} width={s()} height={s()} transform="rotate(45)" fill={color()} />}
-      >
-        {(src) => (
-          <image href={src()} x={-img()} y={-img()} width={img() * 2} height={img() * 2} clip-path="url(#rounded)" preserveAspectRatio="xMidYMid slice" />
-        )}
-      </Show>
-    </g>
-  );
-}
-
-const RIFT_COLOR = '#4fd1c5';
-const URN_COLOR = '#f5c451';
 
 /** The icon in front of an event: the objective's, rift's or urn's own icon, else a symbol. */
 function eventIcon(e: FrameEvent): JSX.Element {
@@ -227,161 +187,6 @@ function eventExtra(e: FrameEvent, assets?: LiveAssets): JSX.Element | null {
     return thing(ability.image, ability.name, pips);
   }
   return null;
-}
-
-/**
- * The Unstable Rift: dimmed with a dashed outline and a countdown while it appears, then open with each team's
- * capture progress as a bar below it (Hidden King on top), a pulsing ring while both teams contest it, and the time
- * left before it closes.
- */
-function RiftMarker(props: { r: FrameRift; at: [number, number] }) {
-  const k = useContext(MapScale);
-  const s = 16;
-  const outer = s + 4;
-  const title = () => {
-    if (!props.r.open) return `Unstable Rift · opens${props.r.opens_in_s != null ? ` in ${clock(props.r.opens_in_s)}` : ' soon'}`;
-    const pct = props.r.progress.map((p) => `${Math.round(p * 100)}%`);
-    const left = props.r.closes_in_s != null ? ` · closes in ${clock(props.r.closes_in_s)}` : '';
-    return `Unstable Rift · ${TEAM_NAMES[0]} ${pct[0]}, ${TEAM_NAMES[1]} ${pct[1]}${props.r.contested ? ' · contested' : ''}${left}`;
-  };
-  const label = (text: string, y: number, fill: string) => (
-    <text y={y} text-anchor="middle" fill={fill} class="text-[11px] font-semibold tabular" paint-order="stroke" stroke="#0b0a10" stroke-width="3.5">
-      {text}
-    </text>
-  );
-  return (
-    <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000}) scale(${k()})`} opacity={props.r.open ? 1 : 0.8}>
-      <title>{title()}</title>
-      <Show when={props.r.open && props.r.contested}>
-        <rect
-          x={-outer - 6}
-          y={-outer - 6}
-          width={outer * 2 + 12}
-          height={outer * 2 + 12}
-          rx={outer * 0.5}
-          fill="none"
-          stroke="var(--color-warn)"
-          stroke-width="2.5"
-          class="animate-pulse-soft"
-        />
-      </Show>
-      <rect
-        x={-outer}
-        y={-outer}
-        width={outer * 2}
-        height={outer * 2}
-        rx={outer * 0.35}
-        fill="#0b0a10"
-        stroke={RIFT_COLOR}
-        stroke-width="3"
-        stroke-dasharray={props.r.open ? undefined : '6 5'}
-      />
-      <image href={RIFT_ICON} x={-s * 0.8} y={-s * 0.8} width={s * 1.6} height={s * 1.6} />
-      <Show when={!props.r.open && props.r.opens_in_s != null}>{label(clock(props.r.opens_in_s), -outer - 6, RIFT_COLOR)}</Show>
-      <Show when={props.r.open}>
-        <For each={[0, 1] as const}>
-          {(team) => (
-            <>
-              <rect x={-outer} y={outer + 4 + team * 7} width={outer * 2} height="5" rx="2" fill="rgb(0 0 0 / 0.7)" />
-              <rect x={-outer} y={outer + 4 + team * 7} width={outer * 2 * props.r.progress[team]} height="5" rx="2" fill={TEAM_COLOR[team]} />
-            </>
-          )}
-        </For>
-        <Show when={props.r.closes_in_s != null}>{label(clock(props.r.closes_in_s), -outer - 6, 'var(--color-ink-100)')}</Show>
-      </Show>
-    </g>
-  );
-}
-
-/** The Soul Urn lying on the ground. */
-function UrnMarker(props: { at: [number, number]; value?: number | null }) {
-  const k = useContext(MapScale);
-  const s = 13;
-  const outer = s + 4;
-  return (
-    <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000}) scale(${k()})`}>
-      <title>{`Soul Urn${props.value ? ` · ${props.value} souls` : ''}`}</title>
-      <rect x={-outer} y={-outer} width={outer * 2} height={outer * 2} rx={outer * 0.35} fill="#0b0a10" stroke={URN_COLOR} stroke-width="3" />
-      <image href={URN_ICON} x={-s * 0.85} y={-s * 0.85} width={s * 1.7} height={s * 1.7} />
-    </g>
-  );
-}
-
-/** Where the carried urn has to go: a dashed ring in the carrier's team colour. */
-function UrnDelivery(props: { at: [number, number]; color: string }) {
-  const k = useContext(MapScale);
-  return (
-    <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000}) scale(${k()})`}>
-      <title>Soul Urn delivery point</title>
-      <circle r="22" fill="rgb(11 10 16 / 0.6)" stroke={props.color} stroke-width="3" stroke-dasharray="7 5" />
-      <image href={URN_ICON} x="-12" y="-12" width="24" height="24" opacity="0.6" />
-    </g>
-  );
-}
-
-/** A small urn on the carrier's hero marker (drawn above the heroes, top right of the carrier). */
-function UrnCarried(props: { at: [number, number] }) {
-  const k = useContext(MapScale);
-  return (
-    <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000}) scale(${k()}) translate(15 -15)`} class="pointer-events-none">
-      <circle r="10" fill="#0b0a10" stroke={URN_COLOR} stroke-width="2.5" />
-      <image href={URN_ICON} x="-7.5" y="-7.5" width="15" height="15" />
-    </g>
-  );
-}
-
-function HeroMarker(props: {
-  p: FramePlayer;
-  at: [number, number] | undefined;
-  assets?: LiveAssets;
-  selected: boolean;
-  label: string;
-  showName: boolean;
-  onSelect: () => void;
-}) {
-  const hero = () => heroOf(props.assets, props.p.hero_id);
-  const hp = () => (props.p.max_hp ? Math.max(0, Math.min(1, (props.p.hp ?? 0) / props.p.max_hp)) : 1);
-  const k = useContext(MapScale);
-  return (
-    <Show when={props.at}>
-      {(at) => (
-        <g
-          transform={`translate(${at()[0] * 1000} ${at()[1] * 1000}) scale(${k()})`}
-          class="cursor-pointer"
-          opacity={props.p.alive ? 1 : 0.45}
-          onClick={(e) => {
-            e.stopPropagation();
-            props.onSelect();
-          }}
-        >
-          <title>{`${hero()?.name ?? 'Hero'} · ${props.label}`}</title>
-          <Show when={props.selected}>
-            <circle r="25" fill="none" stroke="var(--color-gold-400)" stroke-width="3" />
-          </Show>
-          <circle r="17" fill="#121019" stroke={TEAM_COLOR[props.p.team]} stroke-width="3.5" />
-          <Show when={hero()?.minimap ?? hero()?.icon}>
-            {(src) => (
-              <image href={src()} x="-14" y="-14" width="28" height="28" clip-path="url(#hero-clip)" filter={props.p.alive ? undefined : 'url(#grey)'} />
-            )}
-          </Show>
-          <Show when={props.p.alive && props.p.ult_ready}>
-            <circle cx="13" cy="-13" r="4.5" fill="var(--color-gold-400)" stroke="#0b0a10" stroke-width="2">
-              <title>Ultimate ready</title>
-            </circle>
-          </Show>
-          <Show when={props.p.alive} fallback={<text y="5" text-anchor="middle" class="fill-ink-100 text-[15px] font-bold">{Math.ceil(props.p.respawn_in_s ?? 0) || '✝'}</text>}>
-            <rect x="-17" y="20" width="34" height="5" rx="2" fill="rgb(0 0 0 / 0.7)" />
-            <rect x="-17" y="20" width={34 * hp()} height="5" rx="2" fill={hp() > 0.5 ? '#3ecf8e' : hp() > 0.25 ? '#f5c451' : '#f2555a'} />
-          </Show>
-          <Show when={props.showName || props.selected}>
-            <text y="-24" text-anchor="middle" class="pointer-events-none fill-ink-100 text-[13px] font-semibold" paint-order="stroke" stroke="#0b0a10" stroke-width="4">
-              {props.label}
-            </text>
-          </Show>
-        </g>
-      )}
-    </Show>
-  );
 }
 
 function describe(e: FrameEvent, name: (id: number | null | undefined) => string, ability: (id: number) => string): string {
@@ -542,6 +347,74 @@ function eventGroup(e: FrameEvent): Exclude<EventGroup, 'all'> {
   }
 }
 
+/**
+ * The map seen from straight above (the minimap), tilted with the minimap's buildings raised (2.5D), or tilted with
+ * the game's own map geometry (3D).
+ */
+type MapView = '2d' | '25d' | '3d';
+const VIEW_KEY = 'naebka.liveMap.view';
+
+function savedView(): MapView {
+  try {
+    const v = localStorage.getItem(VIEW_KEY);
+    return v === '25d' || v === '3d' ? v : '2d';
+  } catch {
+    return '2d';
+  }
+}
+
+function saveView(view: MapView) {
+  try {
+    localStorage.setItem(VIEW_KEY, view);
+  } catch {
+    // storage blocked: the choice lasts until the page is left
+  }
+}
+
+const QUALITY_KEY = 'naebka.liveMap.quality';
+
+function savedQuality(): MapQuality {
+  try {
+    return localStorage.getItem(QUALITY_KEY) === 'high' ? 'high' : 'standard';
+  } catch {
+    return 'standard';
+  }
+}
+
+function saveQuality(quality: MapQuality) {
+  try {
+    localStorage.setItem(QUALITY_KEY, quality);
+  } catch {
+    // storage blocked: the choice lasts until the page is left
+  }
+}
+
+/** Switches between the 2D, 2.5D and 3D views; the choice is remembered in this browser. */
+function ViewSwitch(props: { value: MapView; onChange: (view: MapView) => void }) {
+  const options: { value: MapView; label: string; title: string }[] = [
+    { value: '2d', label: '2D', title: 'The minimap, from straight above' },
+    { value: '25d', label: '2.5D', title: "Tilted, with the minimap's buildings standing up: drag, scroll and right-drag to look around" },
+    { value: '3d', label: '3D', title: "The game's own map, simplified, in its colours: drag, scroll and right-drag to look around" },
+  ];
+  return (
+    <div role="radiogroup" aria-label="Map view" class="absolute bottom-3 left-3 flex overflow-hidden rounded-lg bg-ink-950/85 ring-1 ring-ink-700">
+      <For each={options}>
+        {(o) => (
+          <button
+            role="radio"
+            aria-checked={props.value === o.value}
+            title={o.title}
+            class={`px-2.5 py-1 text-xs font-semibold transition-colors ${props.value === o.value ? 'bg-gold-500/15 text-gold-300' : 'text-ink-300 hover:bg-ink-800 hover:text-ink-100'}`}
+            onClick={() => props.onChange(o.value)}
+          >
+            {o.label}
+          </button>
+        )}
+      </For>
+    </div>
+  );
+}
+
 const MIN_VIEW = 200; // most zoomed in: a fifth of the map across
 
 /**
@@ -549,7 +422,8 @@ const MIN_VIEW = 200; // most zoomed in: a fifth of the map across
  * doesn't select or deselect heroes.
  */
 function usePanZoom() {
-  const [box, setBox] = createSignal({ x: 0, y: 0, w: 1000 });
+  // A box equal to the current one changes nothing, so it doesn't redraw the map or wake what depends on it.
+  const [box, setBox] = createSignal({ x: 0, y: 0, w: 1000 }, { equals: (a, b) => a.x === b.x && a.y === b.y && a.w === b.w });
   let svg: SVGSVGElement | undefined;
   let drag: { px: number; py: number; x: number; y: number; moved: boolean } | null = null;
   let suppressClick = false;
@@ -565,7 +439,9 @@ function usePanZoom() {
     setBox(clamp({ w, x: b.x + fx * b.w - fx * w, y: b.y + fy * b.w - fy * w }));
   };
   const centerOn = (x: number, y: number) => {
-    const b = box();
+    // Following calls this from an effect: reading the box there would make the effect wake itself with this write,
+    // over and over, until the stack overflowed.
+    const b = untrack(box);
     setBox(clamp({ w: b.w, x: x - b.w / 2, y: y - b.w / 2 }));
   };
   const reset = () => setBox({ x: 0, y: 0, w: 1000 });
@@ -608,7 +484,9 @@ function usePanZoom() {
   const click = (f: () => void) => () => {
     if (!suppressClick) f();
   };
-  return { box, zoom, reset, centerOn, bind, onPointerDown, onPointerMove, onPointerUp, click, zoomed: () => box().w < 999 };
+  // A memo, so what depends on it (following) wakes when the map is zoomed in or out, not on every move.
+  const zoomed = createMemo(() => box().w < 999);
+  return { box, zoom, reset, centerOn, bind, onPointerDown, onPointerMove, onPointerUp, click, zoomed };
 }
 
 export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
@@ -627,7 +505,17 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
   const [follow, setFollow] = createSignal(false);
   const [tab, setTab] = createSignal<'events' | 'stats' | 'builds' | 'souls'>('events');
   const [filter, setFilter] = createSignal<EventGroup>('all');
-  const [layers, setLayers] = createSignal({ lanes: true, objectives: true, camps: true, names: false });
+  const [layers, setLayers] = createSignal<MapLayers>({ lanes: true, objectives: true, camps: true, names: false, buildings: true });
+  const [mapView, setMapView] = createSignal<MapView>(savedView());
+  const chooseView = (v: MapView) => {
+    setMapView(v);
+    saveView(v);
+  };
+  const [quality, setQuality] = createSignal<MapQuality>(savedQuality());
+  const chooseQuality = (q: MapQuality) => {
+    setQuality(q);
+    saveQuality(q);
+  };
 
   useTopic(
     () => (allowed() && !denied() ? `watch:${props.externalId}` : null),
@@ -660,6 +548,8 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
     const xy = id == null ? undefined : play.view()?.pos.get(id);
     return xy ? at(xy[0], xy[1]) : null;
   };
+  /** A hero's interpolated height in world units; null in frames from bots that don't send it. */
+  const heroZ = (id: number | null): number | null => (id == null ? null : (play.view()?.pos.get(id)?.[2] ?? null));
   // Hero and team from the broadcast, or from the match's roster before the first frame.
   const who = (id: number): Who => {
     const live = players().find((p) => p.account_id === id);
@@ -681,8 +571,8 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
   };
   const midboss = () => frame()?.objectives.find((o) => o.kind === 'midboss');
 
-  // Follow the selected hero while zoomed in.
-  const followed = () => (follow() && view.zoomed() ? heroAt(selected()) : null);
+  // Follow the selected hero while zoomed in (the 2.5D view follows by itself).
+  const followed = () => (mapView() === '2d' && follow() && view.zoomed() ? heroAt(selected()) : null);
   createEffect(() => {
     const xy = followed();
     if (xy) view.centerOn(xy[0] * 1000, xy[1] * 1000);
@@ -718,80 +608,104 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
           <div class="@container">
           <div class="grid gap-4 p-4 @5xl:grid-cols-[minmax(0,1fr)_360px]">
             <div class="flex min-w-0 flex-col gap-3">
-              <div class="relative aspect-square w-full overflow-hidden rounded-xl border border-ink-700 bg-ink-950">
-                <MapScale.Provider value={scale}>
-                  <svg
-                    ref={view.bind}
-                    viewBox={`${view.box().x} ${view.box().y} ${view.box().w} ${view.box().w}`}
-                    class={`size-full touch-none select-none ${view.zoomed() ? 'cursor-grab active:cursor-grabbing' : ''}`}
-                    role="img"
-                    aria-label="Live map"
-                    onClick={view.click(() => setSelected(null))}
-                    onPointerDown={view.onPointerDown}
-                    onPointerMove={view.onPointerMove}
-                    onPointerUp={view.onPointerUp}
-                    onPointerCancel={view.onPointerUp}
-                    onDblClick={() => view.reset()}
-                  >
-                    <defs>
-                      <clipPath id="hero-clip"><circle r="14" /></clipPath>
-                      <clipPath id="rounded" clipPathUnits="objectBoundingBox"><rect width="1" height="1" rx="0.25" /></clipPath>
-                      <filter id="grey"><feColorMatrix type="saturate" values="0" /></filter>
-                    </defs>
-                    <Show when={assets.data?.map.image}>
-                      {(src) => <image href={src()} x="0" y="0" width="1000" height="1000" preserveAspectRatio="none" opacity="0.55" />}
-                    </Show>
-                    <Show when={layers().lanes}>
-                      <For each={assets.data?.map.lanes ?? []}>
-                        {(lane) => (
-                          <polyline
-                            points={lane.points.map(([x, y]) => at(x, y).map((v) => (v * 1000).toFixed(1)).join(',')).join(' ')}
-                            fill="none"
-                            stroke={lane.color}
-                            stroke-width={5 * scale()}
-                            stroke-linecap="round"
-                            opacity="0.35"
-                          />
-                        )}
-                      </For>
-                    </Show>
-                    <Show when={layers().camps}>
-                      <Index each={frame()?.camps ?? []}>
-                        {(c) => <CampMarker camp={c()} kind={kindOf()(c())} sinner={sinnerAt(c().x, c().y)} at={at(c().x, c().y)} />}
-                      </Index>
-                    </Show>
-                    <Show when={layers().objectives}>
-                      <Index each={frame()?.objectives ?? []}>
-                        {(o) => <ObjectiveMarker o={o()} at={at(o().x, o().y)} />}
-                      </Index>
-                      <Show when={!midboss() && frame()?.midboss_respawn_in_s}>
-                        {(left) => <MidbossTimer left={left()} at={at(0, 0)} />}
-                      </Show>
-                      <Index each={frame()?.powerups ?? []}>{(p) => <PowerupMarker at={at(p().x, p().y)} />}</Index>
-                      <Show when={frame()?.rift}>{(r) => <RiftMarker r={r()} at={at(r().x, r().y)} />}</Show>
-                      <Show when={frame()?.urn?.delivery}>
-                        {(d) => <UrnDelivery at={at(d()[0], d()[1])} color={urnCarrierTeam() == null ? URN_COLOR : TEAM_COLOR[urnCarrierTeam()!]} />}
-                      </Show>
-                      <Show when={frame()?.urn?.carrier == null && frame()?.urn}>
-                        {(u) => <UrnMarker at={at(u().x, u().y)} value={u().value} />}
-                      </Show>
-                    </Show>
-                    <Index each={players()}>
-                      {(p) => (
-                        <HeroMarker
-                          p={p()}
-                          at={heroAt(p().account_id) ?? undefined}
-                          assets={assets.data}
-                          selected={selected() === p().account_id}
-                          label={name(p().account_id)}
-                          showName={layers().names}
-                          onSelect={view.click(() => setSelected(p().account_id))}
-                        />
-                      )}
-                    </Index>
-                    <Show when={layers().objectives && heroAt(urnCarrier())}>{(xy) => <UrnCarried at={xy()} />}</Show>
-                  </svg>
-                </MapScale.Provider>
+              <div class={`relative w-full overflow-hidden rounded-xl border border-ink-700 bg-ink-950 ${mapView() === '2d' ? 'aspect-square' : 'aspect-[4/3]'}`}>
+                {/* The 2.5D and 3D views are one component, so switching between them keeps the camera. */}
+                <Show
+                  when={mapView() !== '2d'}
+                  fallback={
+                    <MapScale.Provider value={scale}>
+                      <svg
+                        ref={view.bind}
+                        viewBox={`${view.box().x} ${view.box().y} ${view.box().w} ${view.box().w}`}
+                        class={`size-full touch-none select-none ${view.zoomed() ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                        role="img"
+                        aria-label="Live map"
+                        onClick={view.click(() => setSelected(null))}
+                        onPointerDown={view.onPointerDown}
+                        onPointerMove={view.onPointerMove}
+                        onPointerUp={view.onPointerUp}
+                        onPointerCancel={view.onPointerUp}
+                        onDblClick={() => view.reset()}
+                      >
+                        <defs>
+                          <clipPath id="hero-clip"><circle r="14" /></clipPath>
+                          <clipPath id="rounded" clipPathUnits="objectBoundingBox"><rect width="1" height="1" rx="0.25" /></clipPath>
+                          <filter id="grey"><feColorMatrix type="saturate" values="0" /></filter>
+                        </defs>
+                        <Show when={assets.data?.map.image}>
+                          {(src) => <image href={src()} x="0" y="0" width="1000" height="1000" preserveAspectRatio="none" opacity="0.55" />}
+                        </Show>
+                        <Show when={layers().lanes}>
+                          <For each={assets.data?.map.lanes ?? []}>
+                            {(lane) => (
+                              <polyline
+                                points={lane.points.map(([x, y]) => at(x, y).map((v) => (v * 1000).toFixed(1)).join(',')).join(' ')}
+                                fill="none"
+                                stroke={lane.color}
+                                stroke-width={5 * scale()}
+                                stroke-linecap="round"
+                                opacity="0.35"
+                              />
+                            )}
+                          </For>
+                        </Show>
+                        <Show when={layers().camps}>
+                          <Index each={frame()?.camps ?? []}>
+                            {(c) => <CampMarker camp={c()} kind={kindOf()(c())} sinner={sinnerAt(c().x, c().y)} at={at(c().x, c().y)} />}
+                          </Index>
+                        </Show>
+                        <Show when={layers().objectives}>
+                          <Index each={frame()?.objectives ?? []}>
+                            {(o) => <ObjectiveMarker o={o()} at={at(o().x, o().y)} />}
+                          </Index>
+                          <Show when={!midboss() && frame()?.midboss_respawn_in_s}>
+                            {(left) => <MidbossTimer left={left()} at={at(0, 0)} />}
+                          </Show>
+                          <Index each={frame()?.powerups ?? []}>{(p) => <PowerupMarker at={at(p().x, p().y)} kind={p().kind} />}</Index>
+                          <Show when={frame()?.rift}>{(r) => <RiftMarker r={r()} at={at(r().x, r().y)} />}</Show>
+                          <Show when={frame()?.urn?.delivery}>
+                            {(d) => <UrnDelivery at={at(d()[0], d()[1])} color={urnCarrierTeam() == null ? URN_COLOR : TEAM_COLOR[urnCarrierTeam()!]} />}
+                          </Show>
+                          <Show when={frame()?.urn?.carrier == null && frame()?.urn}>
+                            {(u) => <UrnMarker at={at(u().x, u().y)} value={u().value} />}
+                          </Show>
+                        </Show>
+                        <Index each={players()}>
+                          {(p) => (
+                            <HeroMarker
+                              p={p()}
+                              at={heroAt(p().account_id) ?? undefined}
+                              assets={assets.data}
+                              selected={selected() === p().account_id}
+                              label={name(p().account_id)}
+                              showName={layers().names}
+                              onSelect={view.click(() => setSelected(p().account_id))}
+                            />
+                          )}
+                        </Index>
+                        <Show when={layers().objectives && heroAt(urnCarrier())}>{(xy) => <UrnCarried at={xy()} />}</Show>
+                      </svg>
+                    </MapScale.Provider>
+                  }
+                >
+                  <LiveMap25D
+                    scene={mapView() === '3d' ? 'model' : 'terrain'}
+                    quality={quality()}
+                    frame={frame()}
+                    assets={assets.data}
+                    at={at}
+                    heroAt={heroAt}
+                    heroZ={heroZ}
+                    layers={layers()}
+                    selected={selected()}
+                    onSelect={(id) => setSelected(id)}
+                    label={name}
+                    campKind={kindOf()}
+                    sinnerAt={sinnerAt}
+                    carrierTeam={urnCarrierTeam()}
+                    follow={follow()}
+                  />
+                </Show>
                 <Show when={!play.view()}>
                   <div class="absolute inset-0 grid place-items-center bg-ink-950/70 text-center">
                     <div class="flex flex-col items-center gap-2 px-6">
@@ -817,13 +731,16 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
                     </div>
                   )}
                 </Show>
-                <div class="absolute bottom-3 right-3 flex flex-col overflow-hidden rounded-lg bg-ink-950/85 ring-1 ring-ink-700">
-                  <button class="px-2.5 py-1 text-sm text-ink-200 hover:bg-ink-800" title="Zoom in (or scroll)" onClick={() => view.zoom(0.7)}>+</button>
-                  <button class="px-2.5 py-1 text-sm text-ink-200 hover:bg-ink-800" title="Zoom out" onClick={() => view.zoom(1 / 0.7)}>−</button>
-                  <Show when={view.zoomed()}>
-                    <button class="px-2.5 py-1 text-xs text-ink-300 hover:bg-ink-800" title="Whole map (or double-click)" onClick={() => view.reset()}>⤢</button>
-                  </Show>
-                </div>
+                <Show when={mapView() === '2d'}>
+                  <div class="absolute bottom-3 right-3 flex flex-col overflow-hidden rounded-lg bg-ink-950/85 ring-1 ring-ink-700">
+                    <button class="px-2.5 py-1 text-sm text-ink-200 hover:bg-ink-800" title="Zoom in (or scroll)" onClick={() => view.zoom(0.7)}>+</button>
+                    <button class="px-2.5 py-1 text-sm text-ink-200 hover:bg-ink-800" title="Zoom out" onClick={() => view.zoom(1 / 0.7)}>−</button>
+                    <Show when={view.zoomed()}>
+                      <button class="px-2.5 py-1 text-xs text-ink-300 hover:bg-ink-800" title="Whole map (or double-click)" onClick={() => view.reset()}>⤢</button>
+                    </Show>
+                  </div>
+                </Show>
+                <ViewSwitch value={mapView()} onChange={chooseView} />
               </div>
 
               <div class="flex flex-wrap items-center gap-2">
@@ -836,6 +753,22 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
                 {toggle('objectives', 'Objectives')}
                 {toggle('camps', 'Camps')}
                 {toggle('names', 'Names')}
+                {/* The 3D view's buildings are the game's own, so they always stand. */}
+                <Show when={mapView() === '25d'}>{toggle('buildings', 'Buildings')}</Show>
+                <Show when={mapView() !== '2d'}>
+                  <label
+                    class="flex cursor-pointer items-center gap-1.5 text-xs text-ink-300"
+                    title="Sharper drawing, and in 3D the game's map in more detail, with the sun's shadows. Needs a faster graphics card; remembered in this browser."
+                  >
+                    <input
+                      type="checkbox"
+                      class="accent-gold-500"
+                      checked={quality() === 'high'}
+                      onChange={(e) => chooseQuality(e.currentTarget.checked ? 'high' : 'standard')}
+                    />
+                    High quality
+                  </label>
+                </Show>
                 <Show when={selected() != null}>
                   <label class="flex cursor-pointer items-center gap-1.5 text-xs text-ink-300" title="Keep the selected hero in the middle while zoomed in">
                     <input
@@ -844,7 +777,7 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
                       checked={follow()}
                       onChange={(e) => {
                         setFollow(e.currentTarget.checked);
-                        if (e.currentTarget.checked && !view.zoomed()) view.zoom(0.45);
+                        if (e.currentTarget.checked && mapView() === '2d' && !view.zoomed()) view.zoom(0.45);
                       }}
                     />
                     Follow
@@ -910,7 +843,7 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
                       midbossHp={midboss() ? midboss()!.hp / Math.max(1, midboss()!.max_hp) : null}
                       midbossRespawn={f().midboss_respawn_in_s ?? null}
                       camps={campCounts()}
-                      powerups={f().powerups?.length ?? 0}
+                      powerups={(f().powerups ?? []).map((p) => p.kind ?? null)}
                       carrier={tag}
                       carrierTeam={urnCarrierTeam()}
                       assets={assets.data}

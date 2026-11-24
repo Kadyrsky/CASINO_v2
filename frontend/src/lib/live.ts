@@ -66,12 +66,16 @@ export function abilityOf(assets: LiveAssets | undefined, id: number) {
 export const URN_ICON = '/icons/objectives/urn.webp';
 export const RIFT_ICON = '/icons/objectives/rift.webp';
 
-/** A map objective's icon from the Deadlock Wiki (see scripts/wiki_icons.py). Patrons show their team's glyph. */
+/**
+ * A map objective's icon from the Deadlock Wiki (see scripts/wiki_icons.py). Patrons show their team's glyph; base
+ * guardians, a different statue for each team, their team's.
+ */
 export function objectiveIcon(kind: ObjectiveKind, team: 0 | 1 | null): string | null {
   switch (kind) {
     case 'guardian':
-    case 'base_guardian':
       return '/icons/objectives/guardian.webp';
+    case 'base_guardian':
+      return `/icons/objectives/base-guardian-${team ?? 0}.webp`;
     case 'walker':
       return '/icons/objectives/walker.webp';
     case 'patron':

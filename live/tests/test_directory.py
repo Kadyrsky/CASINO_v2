@@ -7,7 +7,16 @@ from typing import Any, cast
 
 import httpx
 
-from naebka_live.directory import Enricher, average_badge, badge_from_index, badge_index, build_directory, compact_assets
+from naebka_live.directory import (
+    ZIPLINE_STEPS,
+    Enricher,
+    average_badge,
+    badge_from_index,
+    badge_index,
+    build_directory,
+    compact_assets,
+    zipline_points,
+)
 
 
 class FakeRedis:
@@ -108,10 +117,21 @@ def test_assets_keep_only_what_the_site_draws() -> None:
     assert a["ranks"]["10"]["image"] == "l.webp"
     assert list(a["items"]) == ["5"]
     assert a["abilities"] == {"6": {"name": "Fireball", "image": "f.webp"}}  # hero abilities only, not Jump
-    assert a["map"]["lanes"][0]["points"] == [[10, 20], [11, 22]]
+    assert a["map"]["lanes"][0]["points"] == [[10, 20, 0], [11, 22, 3]]  # no handles: straight, with heights
     assert a["map"]["radius"] == 10752
     assert a["map"]["camps"] == [{"kind": "strong", "x": -9248.0, "y": 0.0}, {"kind": "vault", "x": 2208.0, "y": -960.0}]
     assert a["map"]["urn_spawns"] == [[-6584.0, 0.0]] and a["map"]["urn_pads"] == [[6304.0, -96.0]]
     assert a["map"]["rift_spots"] == [[-7648.0, 0.0], [7648.0, 0.0]]
     # Older map data without camps or entities still works.
     assert compact_assets([], [], [], {"radius": 1})["map"]["camps"] == []
+
+
+def test_zipline_cables_follow_their_curves() -> None:
+    # Two points 100 apart and 90 up, with handles that make the cable bulge upwards (as deadlock-api sends them:
+    # P2 leaves a point, P1 comes into the next, both relative to their point).
+    path = {"origin": [1000, 2000, 300], "P0_points": [[0, 0, 0], [0, 100, 90]],
+            "P1_points": [[0, 0, 0], [0, -30, 60]], "P2_points": [[0, 30, 60], [0, 0, 0]]}
+    cable = zipline_points(path)
+    assert len(cable) == 1 + ZIPLINE_STEPS
+    assert cable[0] == [1000, 2000, 300] and cable[-1] == [1000, 2100, 390]
+    assert cable[ZIPLINE_STEPS // 2] == [1000, 2050, 390]  # halfway: 90 up, where a straight cable would be at 45

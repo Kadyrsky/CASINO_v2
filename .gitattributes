@@ -4,3 +4,4 @@
 *.rst linguist-documentation
 *.png binary
 *.mp3 binary
+*.gz binary
