@@ -29,7 +29,7 @@ RUN mvn -q -B dependency:go-offline
 COPY core/src ./src
 RUN mvn -q -B -DskipTests package
 
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:25-jre
 WORKDIR /app
 COPY --from=build /src/target/naebka-core-*.jar app.jar
 COPY --from=frontend /app/dist /app/static
