@@ -43,7 +43,7 @@ public record NaebkaProperties(
     /** Tiered limits for unverified users, review of recent profile changes, document-number hash key (Risk #5). */
     public record Kyc(long unverifiedDepositCapTokens, int profileChangeReviewDays, String documentHashKey) {}
 
-    public record Auth(int maxFailedLogins, int lockoutMinutes) {}
+    public record Auth(int maxFailedLogins, int lockoutMinutes, int registrationsPerIpPerHour) {}
 
     public record Wallet(long maxDepositTokens, long signupBonusTokens) {}
 
