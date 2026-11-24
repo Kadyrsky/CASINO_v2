@@ -305,13 +305,18 @@ export interface LiveDirectory {
 export interface LiveAssets {
   heroes: Record<string, { name: string; icon: string | null; minimap: string | null; color: [number, number, number] | null }>;
   ranks: Record<string, { name: string; image: string | null; color: string | null }>;
-  items: Record<string, { name: string; image: string | null; tier: number | null; slot: string | null }>;
+  /**
+   * Every upgrade, by id. `shop` marks those the shop sells (missing in assets cached before it); the others are
+   * removed items, some under internal names, and Street Brawl's own.
+   */
+  items: Record<string, { name: string; image: string | null; tier: number | null; slot: string | null; shop?: boolean }>;
   /** Heroes' own abilities (missing in assets the watcher cached before abilities were added). */
   abilities?: Record<string, { name: string; image: string | null }>;
   map: {
     radius: number;
     image: string | null;
-    lanes: { color: string; points: [number, number][] }[];
+    /** The ziplines; their points have heights (z) in assets the watcher made since zipline heights were added. */
+    lanes: { color: string; points: [x: number, y: number, z?: number][] }[];
     /** Neutral camps by kind ("vault" is a Sinner's Sacrifice); missing in assets cached before camps were added. */
     camps?: { kind: CampKind; x: number; y: number }[];
     urn_spawns?: [number, number][];
@@ -354,6 +359,11 @@ export interface FramePlayer {
   abilities?: FrameAbility[];
   x: number | null;
   y: number | null;
+  /**
+   * Height of the hero's feet, in world units like x and y (streets are at about 250–500, bridges and roofs higher,
+   * tunnels lower); missing in frames from older bots.
+   */
+  z?: number | null;
   hp: number | null;
   max_hp: number | null;
   /** Unspent souls. */
@@ -376,6 +386,8 @@ export interface FrameCamp {
   id: number;
   x: number;
   y: number;
+  /** Height of the camp's floor, like a hero's z; missing in frames from older bots (as are the other markers' z). */
+  z?: number | null;
   /** Seconds until it is back; null while it is up. */
   respawn_in_s: number | null;
 }
@@ -384,6 +396,7 @@ export interface FrameCamp {
 export interface FrameSinner {
   x: number;
   y: number;
+  z?: number | null;
   hp: number;
   max_hp: number;
 }
@@ -397,6 +410,8 @@ export interface FrameObjective {
   lane: number | null;
   x: number;
   y: number;
+  /** Height of its feet (the Mid-Boss stands in its pit, at about -830). */
+  z?: number | null;
   hp: number;
   max_hp: number;
 }
@@ -421,9 +436,12 @@ export type FrameEvent =
 export interface FrameUrn {
   x: number;
   y: number;
+  /** On the ground its own height, carried its carrier's. */
+  z?: number | null;
   carrier: number | null;
   /** Where it has to be taken, once someone picked it up. */
   delivery: [number, number] | null;
+  delivery_z?: number | null;
   /** Souls it gives the team that delivers it. */
   value?: number | null;
 }
@@ -432,6 +450,7 @@ export interface FrameUrn {
 export interface FrameRift {
   x: number;
   y: number;
+  z?: number | null;
   open: boolean;
   /** Seconds until an appearing rift opens. */
   opens_in_s?: number | null;
@@ -444,6 +463,18 @@ export interface FrameRift {
   heroes?: [number[], number[]];
   /** Seconds until an open rift closes uncaptured. */
   closes_in_s: number | null;
+}
+
+/** What a bridge power-up gives, by the game's names: fire rate and clip size, health, spirit power, or speed. */
+export type PowerupKind = 'gun' | 'survival' | 'casting' | 'movement';
+
+/** A bridge power-up waiting to be picked up. */
+export interface FramePowerup {
+  x: number;
+  y: number;
+  z?: number | null;
+  /** Its kind; absent in frames from bots older than kinds, null when the broadcast doesn't show it. */
+  kind?: PowerupKind | null;
 }
 
 /** One realtime map frame (WebSocket topic watch:{deadlockMatchId}, type LIVE_FRAME), about twice a second. */
@@ -468,9 +499,11 @@ export interface LiveFrame {
   camps?: FrameCamp[];
   /** Seconds until the Mid-Boss is back, while it is dead. */
   midboss_respawn_in_s?: number | null;
+  /** Height of the Mid-Boss's spot in its pit, for that countdown. */
+  midboss_z?: number | null;
   sinners?: FrameSinner[];
   /** Bridge power-ups waiting to be picked up. */
-  powerups?: { x: number; y: number }[];
+  powerups?: FramePowerup[];
   events: FrameEvent[];
   received_at: number;
 }

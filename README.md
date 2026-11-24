@@ -211,19 +211,115 @@ respawn timer, a gold dot when the ultimate is ready), the lanes, the objectives
 * the **Unstable Rift**: a countdown while it appears, then each team's capture progress, a pulsing ring while both
   teams contest it, the heroes on the point and the time before it closes;
 * the **neutral camps** with the game's own respawn timers (small, medium and hard camps, and the Sinner's
-  Sacrifices with their health while someone hits them), the **Mid-Boss** respawn and the **bridge power-ups**.
+  Sacrifices with their health while someone hits them), the **Mid-Boss** respawn and the **bridge power-ups**, each
+  with the game's minimap icon and colour for its kind (Gun, Survival, Casting or Movement: what it gives is in its
+  tooltip); the status panel names the ones waiting, and in 3D the crystal takes its kind's colour, as in the game.
+  Frames from bots older than kinds show a plain bolt.
 
 Scroll or use +/− to zoom, drag to pan, double-click for the whole map; "Follow" keeps the selected hero in view. A
 panel above the tabs sums up the urn, the rift, the Mid-Boss and the camps. The tabs: **events** (kills, purchases,
 level-ups, abilities unlocked and upgraded, objectives, Mid-Boss, urn and rift; filter by kind), **stats** (level,
 K/D/A, souls, health, rank), **builds** (each hero's four abilities with their points, and items) and **souls** (the
 lead over time). Click a hero for a card with its abilities, unspent souls, last hits, denies, damage and items. It
-plays about 25 s behind the real game: Valve's broadcast delay (about 21 s) plus a few seconds of smoothing. You can
-pause and jump back to live.
+plays about 25 s behind the real game: Valve's broadcast delay (about 21 s) plus a few seconds of smoothing. Pause
+holds the picture for up to 5 minutes (the frames kept); Play goes on from there, staying that far behind, until
+⏭ Live jumps back (`frontend/src/lib/playback.ts`).
+
+**2.5D and 3D views**: the **2D | 2.5D | 3D** switch in the map's corner tilts the map in perspective, with the same
+markers standing on it: heroes on stems with their shadows, objectives on pillars that show their health, team light
+around them, rings on the ground for the rift, the urn's pad and the selected hero. **2.5D** raises the buildings of
+the minimap ("Buildings" lays them flat); **3D** shows the game's own map, simplified, in the game's colours, with
+everything at its real height: heroes on a bridge, a roof or a zipline, or in a tunnel, the Sinner's Sacrifices on
+their roofs, and the ziplines hanging where they are. The guardians, walkers and base guardians stand there as the
+game's own models, in their team's colours and facing the way the game places them, with their markers over their
+heads, and the bridge power-ups as the crystal the game shows. Zoomed out they're drawn up to 2.5 times their size so
+they read among buildings ten times their height (zoomed in, true to size), and what the city hides of them (base
+guardians stand in halls, the others in streets between towers) shows through faintly. **Underground and indoors**:
+heroes spend about a fifth of their time where no camera sees them, in the Mid-Boss's hall under the plaza, the
+tunnels round it, the bases' covered courts and big halls. While a hero stands in one of these interiors, the view cuts
+away whatever lies between the camera and the floor around the hero (the street or roof over it, the near walls, the
+buildings in front), up to about 1,400 world units around and about 110 above the floor: the hero's surroundings show
+from any angle, darker, inside a light rim, and close again a moment after it leaves (a jump doesn't close them). Only
+the interior the hero stands in opens, not the storey over it or another nearby. The Mid-Boss stands on the plaza while
+nobody is down in its hall. Drag to pan, scroll (or pinch) to zoom at the pointer, right-drag (or Ctrl-drag, or
+twist two fingers) to turn and tilt, double-click for the whole map; the buttons turn, zoom and point north, and with
+the map focused the arrows pan, +/− zoom, Q/E turn and Page Up/Down tilt. Switching between 2.5D and 3D keeps the
+view, and the browser remembers the one you picked.
+
+**High quality** (a checkbox under the 2.5D and 3D views, remembered in the browser) draws both views with twice the
+screen's pixels (at most 3 per CSS pixel), which the browser scales down for smooth edges, and in 3D loads a more
+detailed model of the map and lets the sun cast shadows. It needs a faster graphics card: four times the pixels to
+fill, a 4.1 MB model of 533,000 triangles instead of 1.9 MB and 233,000, and a 4096 × 4096 shadow map (2048 on GPUs
+whose textures can't be 8192 wide).
+
+How it's drawn (`frontend/src/lib/mapTerrain.ts`, `mapCamera.ts`, `mapRenderer.ts`, `components/LiveMap25D.tsx`):
+the minimap's half see-through dark areas are the streets, its clear holes inside them the buildings. Their outlines
+are traced once per image (marching squares, then straightened) into about 1,400 wall segments, and WebGL draws the
+streets, walls and roofs in the theme's colours. Zooming changes the camera's focal length rather than moving it, so
+no part of the map can get behind the camera. The markers are the 2D map's own SVG markers, placed with the same
+projection and drawn far to near. Without WebGL, or if the image can't be read (it needs CORS, which deadlock-api's
+asset host sends), the flat minimap is shown in perspective instead.
+
+The 3D view's model (`frontend/public/maps/dl_midtown.bin.gz`, 1.9 MB, loaded only when the view is opened; drawn by
+`mapModelRenderer.ts`) is made from a local Deadlock install by `python frontend/scripts/map_model.py` (Python 3.14+ for
+its built-in zstd, numpy and Pillow; it finds the game through Steam, or `--game <folder>`). It reads the map's
+collision world (`maps/dl_midtown.vpk`, binary KeyValues3), keeps the solid shapes in the playable area (not clips or
+sky), drops what no 2.5D camera can see and simplifies the rest by vertex clustering: about 180,000 triangles from 2.1
+million. What no camera sees but a hero can stand in is kept too: the interiors. The map's nav mesh
+(`maps/dl_midtown.nav`, the polygons the game's bots walk on, for the "default" agent of `scripts/nav_hulls.vdata`)
+gives where heroes walk; its polygons lying on floors no camera sees, in connected groups (linked by the nav mesh, or
+meeting at a step or a drop, like the Mid-Boss hall's sunken corner) of at least 50,000 square units, are the interiors
+(about 100 of them: the Mid-Boss's hall, the tunnels, the bases' courts, halls), and their floors and walls stay in the
+model, about 52,000 triangles more. Smaller groups are nooks under arches and awnings, where heroes spend under a tenth
+of their time indoors (measured on live broadcasts), and stay covered. The file (version
+3) ends with the Mid-Boss hall's box and each interior's floor: its nav polygons, grown by 32 units (they stop short of
+the walls) and with the holes round pillars and the gaps between them filled. The view (`mapInteriors.ts`) finds the
+floor under each hero; while it is an interior's, that interior's floor near the hero, raised 110 units, is drawn into
+a depth map from the camera, and the model leaves out what is nearer than it there. Colours come from the render draw
+calls: each has a box, a material and a tint, and a material's colour is its texture's precomputed average colour
+times its tint. `--quality high` writes the High quality setting's model (`dl_midtown.high.bin.gz`) on a 16-unit
+clustering grid instead of 64: about twice the triangles, since the collision world has little finer detail. Run the
+script again (both ways) when a patch changes the map. The geometry and colours are Valve's, like the music below.
+
+The models standing on the 3D map (`frontend/public/maps/objects.bin.gz`, 0.2 MB, loaded with the map; drawn by
+`mapObjectRenderer.ts`) come from the same install by `python frontend/scripts/map_objects.py`: the guardian's and the
+walker's model and scale as `scripts/npc_units.vdata` names them, each team's base guardian (a different statue per
+team), and the bridge power-up's crystal as its particle effect draws it (half size, 70 units above its spawner). The
+script decodes the meshes (meshoptimizer-coded vertex and index buffers, sometimes zstd-packed), colours each triangle
+from its material's colour texture (BC1 and BC7, through Pillow) and makes its self-illuminated parts glow (the
+walker's sun band, the candles, the watchers' eyes), then simplifies each model to about 4,000 to 6,000 triangles by
+vertex clustering, keeping the colours. Team skins are the material groups the game names for each team ("Amber",
+"Sapphire"); the walker has none, so the Archmother's takes its "friendly" skin, a blue glow. The file also lists where
+the map places each guardian, walker, base guardian, patron and power-up spawner (with the way it faces), from the
+map's entities: the view matches frame objectives to these for their facing, and for their height when a frame has
+none. The script also reads the bridge power-ups' kinds (the four `scripts/misc.vdata`'s spawner picks from), each
+one's colour, what it gives, its English name (the game's localization) and its minimap icon (a compiled SVG in
+`panorama/images/minimap`), and writes them to `frontend/src/lib/powerupIcons.ts` for the markers; the crystal gets a
+skin in each kind's colour. Run it again when a patch changes these models or power-ups.
+
+Heights: frames carry z for every hero, objective, camp, Sinner's Sacrifice, power-up, the urn and its pad, the rift
+and the Mid-Boss's spot (the bot reads it on the same 512-unit cells as x and y; camps from their timers), scaled like
+the model (z × 1000 / (2 × radius) map units). The ziplines' heights come from deadlock-api's map data: the watcher
+keeps each cable's Bézier curve as points with z; heroes riding one hang with their feet about 100 units below it.
+Markers in frames from bots older than these heights stand on a grid of ground heights: on the streets the lowest
+surface, so under a bridge rather than on it; ziplines in older assets hang about 400 units above it. Objectives and
+power-ups in such frames stand at their spot's height in the map's entities instead (the objects file), so a power-up
+stays on its bridge and a walker on its street. The sun's
+shadows (`mapModelRenderer.ts`) come from a shadow map rendered once per model, since the sun and the map don't move:
+the model seen along the sunlight, its depths packed into four bytes a texel, compared with nine lookups per pixel for
+soft edges.
 
 Item and objective icons are the game's current art from the [Deadlock Wiki](https://deadlock.wiki), stored as small
 WebP files in `frontend/public/icons/`. Refresh them after a patch with `python frontend/scripts/wiki_icons.py` (needs
-Pillow). Items the wiki has no icon for keep deadlock-api's.
+Pillow; `--objectives` refreshes only the map objectives' icons). Items the wiki has no icon for keep deadlock-api's.
+Every item the shop sells has the wiki's icon and the same name as the wiki's item data (`Data:ItemData.json`, keyed
+by the game's class names, as deadlock-api's items are), checked for all of them and for every item the bot reported
+in nine live matches. deadlock-api's list also holds about 80 items no hero in a normal match can have: removed ones
+(some still under internal names such as `upgrade_weapon_instant_reload`, with other items' art) and Street Brawl's
+own (the wiki has no icons for those). The live service's assets mark the items the shop sells (`shop`).
+Base guardians look nothing like lane guardians, and each team's are a different statue, but the wiki's "Base
+Guardian.png" is the lane guardian's picture: so each team's base guardian icon is cut from the wiki's screenshot of
+that team's pair.
 
 Who may watch: admins and premium players (`POST /api/admin/users/{id}/premium {"premium": true}`) can watch every
 match. Other logged-in players can watch a match once they have at least `LIVE_VIEW_MIN_STAKE_TOKENS` (100) staked on
@@ -459,15 +555,24 @@ cd core && mvn test
 cd core && mvn -Pit test
 # Coverage (JaCoCo) is written by both commands: core/target/site/jacoco/index.html
 
-# Python: 36 tests, mypy --strict
+# Python: 37 tests, mypy --strict
 cd live && python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"   # bin/ on Linux/macOS
 .venv/Scripts/python -m pytest && .venv/Scripts/python -m mypy naebka_live tests
 .venv/Scripts/python -m pytest --cov=naebka_live --cov-report=html   # coverage: live/htmlcov/index.html
 
-# Frontend (no local Node needed): types, lint, 20 unit tests (A/B statistics, play-money notice), build
+# Frontend (no local Node needed): types, lint, 95 unit tests (A/B statistics, play-money notice; the realtime map's
+# camera, playback, terrain, models, interiors, power-ups, items, and the map files it ships, with real heroes'
+# positions), build
 docker run --rm -v "$PWD/frontend:/app" -w /app node:22-alpine sh -c "npm install && npx tsc --noEmit && npx vp lint src && npx vp test run && npm run build"
 
-# Steam bot: 35 unit tests (needs Rust and protoc, see deadlock-bot/README.md)
+# Realtime map in a real browser: 14 Playwright tests in Chromium (WebGL in software) against the mock core
+# (frontend/e2e/mock-core.mjs, a simulated match); its own node_modules, as Playwright's image is not Alpine
+docker run --rm --ipc=host -v "$PWD/frontend:/app" -v naebka-fe-nm-pw:/app/node_modules -w /app mcr.microsoft.com/playwright:v1.65.1-noble sh -c "npm ci && npx playwright test"
+
+# The 3D map's builder: 11 tests on made-up maps (Python 3.14, numpy, Pillow)
+cd frontend && python -m pytest scripts/tests
+
+# Steam bot: 38 unit tests (needs Rust and protoc, see deadlock-bot/README.md)
 cd deadlock-bot && cargo test
 
 # Cashier contract: 17 Hardhat tests (no local Node needed)
@@ -495,6 +600,29 @@ settle" via the scripted `MatchSimulator`):
   subscribed, replay of missed messages with `lastSeq`, delivery only after commit, the realtime-map permission.
 * Chat: messages stored and pushed live on `chat:{room}`, login needed to post, 500-character limit, rate limit.
 * HTTP: RFC 7807 errors, logout revokes the JWT, slot spin is verifiable after seed rotation, poker buy-in/cash-out.
+
+What the realtime map's tests prove (CI runs them all: `frontend`, `frontend-browser`, `map-builder`, `bot`):
+
+* **The map files the site ships** (`src/lib/mapData.test.ts`): both 3D models and the objects file decode into the
+  views' space and stay small enough to send; the Mid-Boss hall's box is in the middle; every interior's floor is in
+  the model. With 1,120 real heroes' positions from live broadcasts (`e2e/fixtures/heroes.json`): heroes in the
+  Mid-Boss hall all stand in one interior, the hall; most heroes on floors no camera sees open an interior, hardly any
+  on floors cameras see do; each opening is its own interior's floor round the hero. Every objective the game places
+  has its spawn (for frames without heights) and every power-up kind its crystal skin.
+* **In a real browser** (`e2e/renderers.spec.ts`, `e2e/live-map.spec.ts`): every shader builds; in a made-up scene an
+  interior opens to show its floor inside a rim and closes again, with and without shadows; in the real map (both
+  qualities) heroes in the Mid-Boss hall, tunnels and halls open theirs while the rest of the view stays as it was; the
+  objects and the 2.5D terrain draw. On the live match page (mock core, nothing fetched from outside): the 2D map has
+  every hero and both power-ups with their kinds; in Builds, every hero has its own four abilities and different items
+  the shop sells, with the wiki's icons; the match starts at 15:00 for whoever comes to watch; the 3D view loads and draws the map, with every hero, and heroes in
+  interiors open them; following a hero in the hall zooms in and keeps it in the middle; High quality loads the
+  detailed map; the 2.5D view raises buildings and lays them flat; scrolling zooms, double-click goes back to the whole
+  map, and the view is remembered; and the page reports no errors.
+* **The builder** (`scripts/tests/test_map_model.py`): it reads the nav mesh's polygons for one agent hull with their
+  links (and gives up on other files); interiors are the nav polygons on floors no camera sees; floors meeting at a
+  step or a drop are one interior, storeys and rooms apart aren't; holes round pillars and gaps between polygons are
+  filled at the floor's height, courtyards and the floor's surroundings aren't; an interior keeps its floor and walls
+  but not its cover; a floor under a roof is hidden from every camera; simplifying keeps buildings' corners sharp.
 
 ## Where each design document lives in the code
 

@@ -6,9 +6,10 @@
  * on screen when the map is zoomed in.
  */
 import { createContext, For, Show, useContext, type JSX } from 'solid-js';
-import type { CampKind, FrameAbility, FrameCamp, FrameRift, FrameSinner, FrameUrn, LiveAssets } from '../api/types';
+import type { CampKind, FrameAbility, FrameCamp, FrameRift, FrameSinner, FrameUrn, LiveAssets, PowerupKind } from '../api/types';
 import { clock, compact } from '../lib/format';
 import { RIFT_ICON, TEAM_COLOR, TEAM_NAMES, TEAM_TEXT, URN_ICON, abilityOf, heroOf } from '../lib/live';
+import { POWERUP_LOOKS } from '../lib/powerupIcons';
 
 /** Marker scale: 1 at the full map, smaller when zoomed in. */
 export const MapScale = createContext<() => number>(() => 1);
@@ -142,13 +143,19 @@ export function MidbossTimer(props: { left: number; at: [number, number] }) {
   );
 }
 
-/** A bridge power-up waiting to be picked up. */
-export function PowerupMarker(props: { at: [number, number] }) {
+/** What a bridge power-up is called on the map: "Gun power-up · fire rate and clip size" when its kind is known. */
+export function powerupLabel(kind: PowerupKind | null | undefined): string {
+  const look = kind ? POWERUP_LOOKS[kind] : undefined;
+  return look ? `${look.name} power-up · ${look.gives}` : 'Bridge power-up';
+}
+
+/** A bridge power-up waiting to be picked up: the game's minimap icon of its kind, or a bolt when that isn't known. */
+export function PowerupMarker(props: { at: [number, number]; kind?: PowerupKind | null }) {
   const k = useContext(MapScale);
   return (
     <g transform={`translate(${props.at[0] * 1000} ${props.at[1] * 1000}) scale(${k()})`}>
-      <title>Bridge power-up</title>
-      <PowerupGlyph />
+      <title>{powerupLabel(props.kind)}</title>
+      <PowerupGlyph kind={props.kind} />
     </g>
   );
 }
@@ -226,7 +233,8 @@ export function ObjectiveStatus(props: {
   midbossHp: number | null;
   midbossRespawn: number | null;
   camps: { up: number; total: number; sinnersUp: number; sinners: number };
-  powerups: number;
+  /** The kind of each bridge power-up waiting (null where it isn't known). */
+  powerups: (PowerupKind | null)[];
   carrier: (id: number) => JSX.Element;
   carrierTeam: 0 | 1 | null;
   assets?: LiveAssets;
@@ -294,29 +302,68 @@ export function ObjectiveStatus(props: {
           {props.camps.up}/{props.camps.total} up · <span style={{ color: SINNER_COLOR }}>{props.camps.sinnersUp}/{props.camps.sinners}</span> sinners
         </span>
       </Tile>
-      <Show when={props.powerups > 0}>
+      <Show when={props.powerups.length > 0}>
         <Tile
           icon={
-            <svg viewBox="-12 -12 24 24" class="size-6">
-              <PowerupGlyph />
+            <svg viewBox="-12.5 -12.5 25 25" class="size-6">
+              <PowerupGlyph kind={props.powerups.find((k) => k != null)} />
             </svg>
           }
           label="Bridge power-ups"
           active
         >
-          {props.powerups} waiting
+          {/* Each one's kind, in its colour, when the frames say; otherwise how many. */}
+          <Show when={props.powerups.some((k) => k != null)} fallback={<>{props.powerups.length} waiting</>}>
+            <span>
+              <For each={props.powerups}>
+                {(k, i) => (
+                  <>
+                    {i() > 0 ? ' · ' : ''}
+                    <span style={{ color: k ? POWERUP_LOOKS[k].color : POWERUP_COLOR }} title={powerupLabel(k)}>
+                      {k ? POWERUP_LOOKS[k].name : 'Unknown'}
+                    </span>
+                  </>
+                )}
+              </For>
+              <span class="text-ink-400"> waiting</span>
+            </span>
+          </Show>
         </Tile>
       </Show>
     </div>
   );
 }
 
-function PowerupGlyph() {
+/**
+ * A power-up's glyph, 24 units across about the origin: its kind's minimap icon from the game (a ring of segments
+ * round a picture) on a dark disc, in the kind's colour; a bolt in a ring when the kind isn't known.
+ */
+function PowerupGlyph(props: { kind?: PowerupKind | null }) {
+  const look = () => (props.kind ? POWERUP_LOOKS[props.kind] : undefined);
   return (
-    <>
-      <circle r="11" fill="#0b0a10" stroke={POWERUP_COLOR} stroke-width="2.5" />
-      <path d="M1.5 -7 L-4.5 1 L-0.5 1 L-1.5 7 L4.5 -1 L0.5 -1 Z" fill={POWERUP_COLOR} />
-    </>
+    <Show
+      when={look()}
+      fallback={
+        <>
+          <circle r="11" fill="#0b0a10" stroke={POWERUP_COLOR} stroke-width="2.5" />
+          <path d="M1.5 -7 L-4.5 1 L-0.5 1 L-1.5 7 L4.5 -1 L0.5 -1 Z" fill={POWERUP_COLOR} />
+        </>
+      }
+    >
+      {(l) => {
+        const s = () => 25 / Math.max(l().box[0], l().box[1]);
+        return (
+          <>
+            <circle r="12" fill="#0b0a10" stroke="rgb(0 0 0 / 0.5)" stroke-width="1.5" />
+            <g transform={`scale(${s()}) translate(${-l().box[0] / 2} ${-l().box[1] / 2})`}>
+              <For each={l().paths}>
+                {(p) => <path d={p.d} fill={l().color} fill-opacity={p.opacity} fill-rule={p.evenOdd ? 'evenodd' : undefined} />}
+              </For>
+            </g>
+          </>
+        );
+      }}
+    </Show>
   );
 }
 

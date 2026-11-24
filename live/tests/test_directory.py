@@ -7,7 +7,16 @@ from typing import Any, cast
 
 import httpx
 
-from naebka_live.directory import Enricher, average_badge, badge_from_index, badge_index, build_directory, compact_assets
+from naebka_live.directory import (
+    ZIPLINE_STEPS,
+    Enricher,
+    average_badge,
+    badge_from_index,
+    badge_index,
+    build_directory,
+    compact_assets,
+    zipline_points,
+)
 
 
 class FakeRedis:
@@ -94,7 +103,10 @@ def test_names_and_ranks_are_fetched_once_and_cached() -> None:
 def test_assets_keep_only_what_the_site_draws() -> None:
     heroes = [{"id": 1, "name": "Infernus", "images": {"icon_image_small": "i.png", "minimap_image_webp": "m.webp"}, "colors": {"ui": [1, 2, 3]}}]
     ranks = [{"tier": 10, "name": "Ascendant", "images": {"large": "l.png", "large_webp": "l.webp"}, "color": "#fff"}]
-    items = [{"id": 5, "type": "upgrade", "name": "Extended Magazine", "image": "x.png", "item_tier": 1, "item_slot_type": "weapon"},
+    items = [{"id": 5, "type": "upgrade", "name": "Extended Magazine", "image": "x.png", "item_tier": 1, "item_slot_type": "weapon",
+              "shopable": True},
+             {"id": 8, "type": "upgrade", "name": "upgrade_weapon_instant_reload", "image": "r.png", "item_tier": 2, "item_slot_type": "weapon",
+              "shopable": False},
              {"id": 6, "type": "ability", "ability_type": "signature", "name": "Fireball", "image": "f.png", "image_webp": "f.webp"},
              {"id": 7, "type": "ability", "ability_type": "innate", "name": "Jump"}]
     world = {"radius": 10752, "images": {"minimap": "map.png"},
@@ -106,12 +118,25 @@ def test_assets_keep_only_what_the_site_draws() -> None:
     a = compact_assets(heroes, ranks, items, world)
     assert a["heroes"]["1"] == {"name": "Infernus", "icon": "i.png", "minimap": "m.webp", "color": [1, 2, 3]}
     assert a["ranks"]["10"]["image"] == "l.webp"
-    assert list(a["items"]) == ["5"]
+    # Every upgrade (a frame may name any), the ones the shop sells marked: not a removed one like this.
+    assert a["items"]["5"] == {"name": "Extended Magazine", "image": "x.png", "tier": 1, "slot": "weapon", "shop": True}
+    assert list(a["items"]) == ["5", "8"] and a["items"]["8"]["shop"] is False
     assert a["abilities"] == {"6": {"name": "Fireball", "image": "f.webp"}}  # hero abilities only, not Jump
-    assert a["map"]["lanes"][0]["points"] == [[10, 20], [11, 22]]
+    assert a["map"]["lanes"][0]["points"] == [[10, 20, 0], [11, 22, 3]]  # no handles: straight, with heights
     assert a["map"]["radius"] == 10752
     assert a["map"]["camps"] == [{"kind": "strong", "x": -9248.0, "y": 0.0}, {"kind": "vault", "x": 2208.0, "y": -960.0}]
     assert a["map"]["urn_spawns"] == [[-6584.0, 0.0]] and a["map"]["urn_pads"] == [[6304.0, -96.0]]
     assert a["map"]["rift_spots"] == [[-7648.0, 0.0], [7648.0, 0.0]]
     # Older map data without camps or entities still works.
     assert compact_assets([], [], [], {"radius": 1})["map"]["camps"] == []
+
+
+def test_zipline_cables_follow_their_curves() -> None:
+    # Two points 100 apart and 90 up, with handles that make the cable bulge upwards (as deadlock-api sends them:
+    # P2 leaves a point, P1 comes into the next, both relative to their point).
+    path = {"origin": [1000, 2000, 300], "P0_points": [[0, 0, 0], [0, 100, 90]],
+            "P1_points": [[0, 0, 0], [0, -30, 60]], "P2_points": [[0, 30, 60], [0, 0, 0]]}
+    cable = zipline_points(path)
+    assert len(cable) == 1 + ZIPLINE_STEPS
+    assert cable[0] == [1000, 2000, 300] and cable[-1] == [1000, 2100, 390]
+    assert cable[ZIPLINE_STEPS // 2] == [1000, 2050, 390]  # halfway: 90 up, where a straight cable would be at 45

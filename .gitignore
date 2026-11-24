@@ -13,6 +13,10 @@
 *.iml
 **/*.egg-info/
 
+# Playwright's results and report (frontend/e2e)
+frontend/test-results/
+frontend/playwright-report/
+
 # Hardhat build output (contracts/)
 contracts/cache/
 contracts/artifacts/

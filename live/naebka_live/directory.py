@@ -196,6 +196,36 @@ class Enricher:
         self.http.close()
 
 
+# Points per curve between two of a zipline's points.
+ZIPLINE_STEPS = 4
+
+
+def zipline_points(path: dict[str, Any]) -> list[list[float]]:
+    """A zipline's cable as [x, y, z] points: deadlock-api's points (P0, from the origin) joined by cubic Bézier
+    curves, whose handles are P2 (out of a point) and P1 (into the next). Measured on live broadcasts, heroes riding
+    it hang with their feet about 100 units below these heights. Straight lines when the handles are missing."""
+    def xyz(row: Any) -> list[float]:
+        values = [float(v) for v in row][:3] if isinstance(row, (list, tuple)) else []
+        return values + [0.0] * (3 - len(values))
+
+    origin = xyz(path["origin"])
+    p0 = [[o + v for o, v in zip(origin, xyz(r))] for r in path.get("P0_points") or []]
+    into = [xyz(r) for r in path.get("P1_points") or []]
+    out_of = [xyz(r) for r in path.get("P2_points") or []]
+    cable = p0[:1]
+    for i, (a, b) in enumerate(zip(p0, p0[1:])):
+        if len(into) != len(p0) or len(out_of) != len(p0):
+            cable.append(b)
+            continue
+        c1 = [v + h for v, h in zip(a, out_of[i])]
+        c2 = [v + h for v, h in zip(b, into[i + 1])]
+        for s in range(1, ZIPLINE_STEPS + 1):
+            t = s / ZIPLINE_STEPS
+            u = 1 - t
+            cable.append([u * u * u * a[k] + 3 * u * u * t * c1[k] + 3 * u * t * t * c2[k] + t * t * t * b[k] for k in range(3)])
+    return [[round(v, 1) for v in p] for p in cable]
+
+
 def compact_assets(heroes: list[Any], ranks: list[Any], items: list[Any], world: dict[str, Any]) -> dict[str, Any]:
     """Only what the website draws, keyed by id."""
     def image(images: dict[str, Any], *names: str) -> str | None:
@@ -226,12 +256,15 @@ def compact_assets(heroes: list[Any], ranks: list[Any], items: list[Any], world:
             }
             for r in ranks if isinstance(r, dict) and "tier" in r
         },
+        # Every upgrade, since a frame may name any; "shop" marks the ones the shop sells. The rest (about 80 of 250)
+        # are removed items, some still under internal names and with other items' art, and Street Brawl's own.
         "items": {
             str(i["id"]): {
                 "name": i.get("name"),
                 "image": i.get("shop_image_small") or i.get("image"),
                 "tier": i.get("item_tier"),
                 "slot": i.get("item_slot_type"),
+                "shop": bool(i.get("shopable")),
             }
             for i in items if isinstance(i, dict) and i.get("type") == "upgrade" and "id" in i
         },
@@ -244,8 +277,9 @@ def compact_assets(heroes: list[Any], ranks: list[Any], items: list[Any], world:
         "map": {
             "radius": world.get("radius"),
             "image": (world.get("images") or {}).get("minimap"),
+            # The ziplines, with their heights for the 3D view (the 2D map uses x and y).
             "lanes": [
-                {"color": z.get("color"), "points": [[z["origin"][0] + p[0], z["origin"][1] + p[1]] for p in z.get("P0_points", [])]}
+                {"color": z.get("color"), "points": zipline_points(z)}
                 for z in world.get("zipline_paths") or [] if isinstance(z, dict) and z.get("origin")
             ],
             # Neutral camps (weak, medium, strong; "vault" is a Sinner's Sacrifice). The bot's frames carry each

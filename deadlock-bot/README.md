@@ -114,13 +114,14 @@ Set `DEADLOCK_BOT_TOKEN` to require `Authorization: Bearer <token>` on every rou
 With `REDIS_URL` set, `serve` also follows match broadcasts for the website's realtime map (`src/feeds.rs`):
 the watcher's tracked matches first, then any match a viewer has open, up to `DEADLOCK_BOT_MAX_FEEDS` (12). Each
 broadcast is read by the [haste](https://github.com/blukai/haste) parser on its own thread (`src/live.rs`) and
-sampled twice a second into a frame: every hero's position, health, level, souls (net worth and unspent), K/D/A,
-last hits, denies, damage, items, abilities (unlocked, points) and ultimate; the objectives still standing; the Soul
-Urn (on the ground or carried, delivery pad, value); the Unstable Rift (appearing with a countdown, then open with
-each team's progress, who is on it, whether it is contested and when it closes); the neutral camps' respawn timers,
-the Sinner's Sacrifices' health, the Mid-Boss respawn and the bridge power-ups; and kill, purchase, level-up,
-ability, objective, Mid-Boss, urn and rift events. Frames go to Redis (`live:frame:{id}` and the channel
-`naebka:live-frames`).
+sampled twice a second into a frame: every hero's position and height, health, level, souls (net worth and
+unspent), K/D/A, last hits, denies, damage, items, abilities (unlocked, points) and ultimate; the objectives still
+standing; the Soul Urn (on the ground or carried, delivery pad, value); the Unstable Rift (appearing with a
+countdown, then open with each team's progress, who is on it, whether it is contested and when it closes); the
+neutral camps' respawn timers, the Sinner's Sacrifices' health, the Mid-Boss respawn and the bridge power-ups (with
+their kind: gun, survival, casting or movement); and
+kill, purchase, level-up, ability, objective, Mid-Boss, urn and rift events. Everything on the map has its height
+(`z`) as well as x and y. Frames go to Redis (`live:frame:{id}` and the channel `naebka:live-frames`).
 
 Broadcast URLs come from deadlock-api's public list (`/v1/matches/live/urls`). Only matches missing from it are
 spectated with the bot account, within the 5-minute spectate wait. One feed uses about 30 MB and a few percent of
@@ -130,6 +131,12 @@ Things learned from live broadcasts:
 
 * Deadlock's position grid is now 128 × 128 cells of 512 units, so the origin is at cell 64 (haste's helper still
   assumes 64 × 64).
+* Heights (z) use the same cells: z = cell × 512 + offset − 32768. Checked against heights sent without cells: the
+  bridge power-ups read 912 (deadlock-api's map: 912), the Sinner's Sacrifices on the Chinatown roof 2496 (their
+  camp timer: 2499), the sunken ones −32 (−32), the Mid-Boss −823 (−832), the open rift 420 (deadlock-api: 420). A
+  hero's z is its feet, so frames put heroes on bridges, roofs and ziplines and in tunnels; streets are at about 250
+  to 500. Camps (and the Mid-Boss's spot, `midboss_z`) take theirs from the camp timers, which are plain vectors; they
+  match deadlock-api's camp heights to 0.2.
 * Valve sends the objective bitmasks only when they change, so a feed that joins mid-match has none until the next
   objective falls (the watcher keeps the live list's until then).
 * Since early November 2026 broadcasts declare a field with a multi-argument template type
@@ -146,6 +153,12 @@ Things learned from live broadcasts:
   `m_timeKothScoring`.
 * The urn falls from the sky for about 12 s when it spawns (the bridge power-ups appear at the same moment), and its
   delivery pad switches on when it lands.
+* Bridge power-ups: each bridge's spawner (`CCitadel_PickupItemSpawner`) says only whether one is waiting
+  (`m_bPowerupActive`; both drop at once, `m_tNextDropTime` says when next). The power-up itself is a
+  `CCitadel_Pickup_Modifier` on the spawner's spot, one per bridge all match: each drop gives it a new kind, its vdata
+  subclass in `m_nSubclassID` (the game's hash of the subclass's name, as deadlock-api's item ids: `gun_powerup_pickup`
+  is 201785745), and shows it; taking it hides it again (`m_fEffects` 32) with its last kind kept. So a waiting
+  power-up's kind is that of the pickup on its spot. Every one followed on five live broadcasts had its kind.
 
 `deadlock-bot live <broadcast_url>` prints the frames as JSON lines, which is the quickest way to check a patch didn't
 break anything.

@@ -55,6 +55,19 @@ const RIFT_OPENS_AFTER_S: f32 = 80.1;
 const SINNER: u64 = fxhash::hash_bytes(b"CNPC_Neutral_SinnersSacrifice");
 /// The two bridge power-up spawners (both drop at once, every few minutes).
 const POWERUP_SPAWNER: u64 = fxhash::hash_bytes(b"CCitadel_PickupItemSpawner");
+/// The power-up itself, a pickup at its spawner's spot. As seen on live broadcasts, one stays on each bridge all match:
+/// each drop gives it a new kind (its vdata subclass, `m_nSubclassID`), makes it active and shows it; taking it hides
+/// it again, its last kind kept. Other pickups (dropped by breakable crates, say) are of this class too.
+const POWERUP_PICKUP: u64 = fxhash::hash_bytes(b"CCitadel_Pickup_Modifier");
+/// The bridge power-ups' kinds by subclass id, the game's hash of the subclass's name (MurmurHash2, seed 0x31415926;
+/// deadlock-api's item ids are the same hash): the four `citadel_item_powerup_spawner` picks from, with the names the
+/// game gives them in English.
+const POWERUP_KINDS: [(u64, &str); 4] = [
+    (201_785_745, "gun"),      // gun_powerup_pickup: fire rate and clip size
+    (828_222_066, "survival"), // survival_powerup_pickup: max health and regeneration
+    (15_572_055, "casting"),   // casting_powerup_pickup: spirit power and cooldowns
+    (754_654_000, "movement"), // movement_powerup_pickup: stamina and sprint speed
+];
 
 const ITEM_ID: u64 = fxhash::hash_bytes(b"m_ItemID");
 const UPGRADE_INFO: u64 = fxhash::hash_bytes(b"m_nUpgradeInfo");
@@ -102,6 +115,9 @@ pub struct Player {
     pub abilities: Vec<Ability>,
     pub x: Option<f32>,
     pub y: Option<f32>,
+    /// Height of the hero's feet, in the same world units: streets are at about 250 to 500, bridges, roofs and
+    /// ziplines higher, tunnels lower. None when Valve didn't send it.
+    pub z: Option<f32>,
     pub hp: Option<i32>,
     pub max_hp: Option<i32>,
     /// Souls not spent yet.
@@ -129,6 +145,8 @@ pub struct Camp {
     pub id: usize,
     pub x: f32,
     pub y: f32,
+    /// Height of the camp's floor (the timer's origin), like a hero's z.
+    pub z: f32,
     /// Seconds until it is back; None while it is up.
     pub respawn_in_s: Option<f32>,
 }
@@ -138,6 +156,7 @@ pub struct Camp {
 pub struct Sinner {
     pub x: f32,
     pub y: f32,
+    pub z: Option<f32>,
     pub hp: i32,
     pub max_hp: i32,
 }
@@ -147,6 +166,17 @@ pub struct Sinner {
 pub struct Powerup {
     pub x: f32,
     pub y: f32,
+    pub z: Option<f32>,
+    /// What it gives: "gun", "survival", "casting" or "movement" (see [`POWERUP_KINDS`]); null when its pickup isn't
+    /// in the broadcast.
+    pub kind: Option<&'static str>,
+}
+
+/// Each power-up's kind: the pickup of a known bridge kind at its spot (x and y, world units).
+fn powerup_kinds(powerups: &mut [Powerup], pickups: &[(f32, f32, &'static str)]) {
+    for p in powerups {
+        p.kind = pickups.iter().find(|(x, y, _)| (x - p.x).hypot(y - p.y) < 100.0).map(|&(_, _, kind)| kind);
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -157,6 +187,8 @@ pub struct Objective {
     pub lane: Option<i32>,
     pub x: f32,
     pub y: f32,
+    /// Height of its feet, like a hero's (the Mid-Boss stands in its pit, at about -830).
+    pub z: Option<f32>,
     pub hp: i32,
     pub max_hp: i32,
 }
@@ -166,10 +198,14 @@ pub struct Objective {
 pub struct Urn {
     pub x: f32,
     pub y: f32,
+    /// Its height on the ground, or its carrier's.
+    pub z: Option<f32>,
     /// The player carrying it; None while it lies on the ground.
     pub carrier: Option<u32>,
     /// Where it has to be taken, once someone has picked it up.
     pub delivery: Option<[f32; 2]>,
+    /// The height of that pad.
+    pub delivery_z: Option<f32>,
     /// Souls it gives the team that delivers it.
     pub value: Option<i32>,
 }
@@ -179,6 +215,7 @@ pub struct Urn {
 pub struct Rift {
     pub x: f32,
     pub y: f32,
+    pub z: Option<f32>,
     pub open: bool,
     /// Seconds until an appearing rift opens.
     pub opens_in_s: Option<f32>,
@@ -242,25 +279,27 @@ struct CampTimer {
     id: usize,
     x: f32,
     y: f32,
+    z: f32,
     next_spawn: f32,
     midboss: bool,
 }
 
-/// The camps to show and the Mid-Boss's respawn, at server time `now`.
-fn camps_at(timers: &[CampTimer], now: f32) -> (Vec<Camp>, Option<f32>) {
+/// The camps to show, the Mid-Boss's respawn and the height of its spot, at server time `now`.
+fn camps_at(timers: &[CampTimer], now: f32) -> (Vec<Camp>, Option<f32>, Option<f32>) {
     let left = |t: &CampTimer| (t.next_spawn > 0.0 && t.next_spawn < UNSET).then(|| (t.next_spawn - now).max(0.0));
     let camps = timers
         .iter()
         .filter(|t| !t.midboss)
-        .map(|t| Camp { id: t.id, x: t.x.round(), y: t.y.round(), respawn_in_s: left(t).map(|s| s.round()) })
+        .map(|t| Camp { id: t.id, x: t.x.round(), y: t.y.round(), z: t.z.round(), respawn_in_s: left(t).map(|s| s.round()) })
         .collect();
     let midboss = timers.iter().filter(|t| t.midboss).find_map(left).map(f32::round);
-    (camps, midboss)
+    let midboss_z = timers.iter().find(|t| t.midboss).map(|t| t.z.round());
+    (camps, midboss, midboss_z)
 }
 
 /// A position Valve set (not FLT_MAX, and not the origin it holds before the first rift).
-fn valid_location(v: [f32; 3]) -> Option<[f32; 2]> {
-    (v[0].abs() < UNSET && v[1].abs() < UNSET && (v[0], v[1]) != (0.0, 0.0)).then_some([v[0], v[1]])
+fn valid_location(v: [f32; 3]) -> Option<[f32; 3]> {
+    (v.iter().all(|c| c.abs() < UNSET) && (v[0], v[1]) != (0.0, 0.0)).then_some(v)
 }
 
 /// The events between two readings of one player's abilities (ability id, upgrade info).
@@ -320,7 +359,7 @@ fn rift_events(time_s: f32, before: Option<&Rift>, now: Option<&Rift>, captured_
 struct RiftRules {
     /// Server time when an open rift gives up; 0 or FLT_MAX while none is open.
     give_up: f32,
-    location: Option<[f32; 2]>,
+    location: Option<[f32; 3]>,
     /// Server time of the last capture; a new value means a new capture.
     scoring_time: f32,
     scoring_team: Option<u8>,
@@ -355,6 +394,8 @@ pub struct Frame {
     pub camps: Vec<Camp>,
     /// Seconds until the Mid-Boss is back, while it is dead.
     pub midboss_respawn_in_s: Option<f32>,
+    /// Height of the Mid-Boss's spot in its pit (its camp timer's), for that countdown.
+    pub midboss_z: Option<f32>,
     pub sinners: Vec<Sinner>,
     pub powerups: Vec<Powerup>,
     pub events: Vec<Event>,
@@ -381,33 +422,42 @@ fn team(e: &Entity) -> Option<u8> {
     int(e, key!("m_iTeamNum")).and_then(team_of)
 }
 
-/// World coordinate from a cell and the offset in it. Cells are 512 units wide (haste's value), but the grid is now
-/// 128 × 128, so the origin sits at cell 64: the mid-boss, at the exact centre of the map, reads cell 64 with offset 0.
-/// haste's `deadlock_coord_from_cell` still assumes a 64 × 64 grid and lands everything 16384 units off.
+/// World coordinate from a cell and the offset in it, on every axis (z too). Cells are 512 units wide (haste's
+/// value), but the grid is now 128 × 128, so the origin sits at cell 64: the mid-boss, at the exact centre of the map,
+/// reads cell 64 with offset 0. haste's `deadlock_coord_from_cell` still assumes a 64 × 64 grid and lands everything
+/// 16384 units off.
 pub fn world_coord(cell: u16, vec: f32) -> f32 {
     const CELL_WIDTH: f32 = 512.0;
     const ORIGIN: f32 = 64.0 * CELL_WIDTH;
     f32::from(cell) * CELL_WIDTH + vec - ORIGIN
 }
 
-fn position(e: &Entity) -> Option<(f32, f32)> {
-    let coord = |cell: u64, vec: u64| -> Option<f32> {
+/// Cell and offset fields of x, y and z in an origin.
+type OriginKeys = [[u64; 2]; 3];
+
+macro_rules! origin_keys {
+    ($($part:literal),+) => {
+        [
+            [key!($($part,)+ "m_cellX"), key!($($part,)+ "m_vecX")],
+            [key!($($part,)+ "m_cellY"), key!($($part,)+ "m_vecY")],
+            [key!($($part,)+ "m_cellZ"), key!($($part,)+ "m_vecZ")],
+        ]
+    };
+}
+
+/// Players use the skeleton origin (haste's deadlock-position example); other entities the scene node.
+const SKELETON_ORIGIN: OriginKeys = origin_keys!("CBodyComponent", "m_skeletonInstance", "m_vecOrigin");
+const SCENE_NODE_ORIGIN: OriginKeys = origin_keys!("CBodyComponent");
+
+/// An entity's world position (x, y) and height (z, None when Valve didn't send it), all from the same origin.
+fn origin(e: &Entity) -> Option<(f32, f32, Option<f32>)> {
+    let coord = |[cell, vec]: [u64; 2]| -> Option<f32> {
         let cell = int(e, cell).and_then(|c| u16::try_from(c).ok())?;
         Some(world_coord(cell, e.get_value::<f32>(&vec)?))
     };
-    // Players use the skeleton origin (haste's deadlock-position example); other entities the scene node.
-    coord(
-        key!("CBodyComponent", "m_skeletonInstance", "m_vecOrigin", "m_cellX"),
-        key!("CBodyComponent", "m_skeletonInstance", "m_vecOrigin", "m_vecX"),
-    )
-    .zip(coord(
-        key!("CBodyComponent", "m_skeletonInstance", "m_vecOrigin", "m_cellY"),
-        key!("CBodyComponent", "m_skeletonInstance", "m_vecOrigin", "m_vecY"),
-    ))
-    .or_else(|| {
-        coord(key!("CBodyComponent", "m_cellX"), key!("CBodyComponent", "m_vecX"))
-            .zip(coord(key!("CBodyComponent", "m_cellY"), key!("CBodyComponent", "m_vecY")))
-    })
+    [SKELETON_ORIGIN, SCENE_NODE_ORIGIN]
+        .into_iter()
+        .find_map(|[x, y, z]| Some((coord(x)?, coord(y)?, coord(z))))
 }
 
 /// Key of element `i` of a dynamic array field (haste keys it as base key + hash(i)); struct members add their name.
@@ -440,11 +490,12 @@ fn camp_timers(rules: &Entity) -> Vec<CampTimer> {
     let len = int(rules, origins).and_then(|n| usize::try_from(n).ok()).unwrap_or(0).min(128);
     (0..len)
         .filter_map(|i| {
-            let [x, y, _] = rules.get_value::<[f32; 3]>(&element(origins, i))?;
+            let [x, y, z] = rules.get_value::<[f32; 3]>(&element(origins, i))?;
             Some(CampTimer {
                 id: i,
                 x,
                 y,
+                z,
                 next_spawn: rules.get_value(&element(next, i)).unwrap_or(-1.0),
                 midboss: rules.get_value(&element(midboss, i)).unwrap_or(false),
             })
@@ -534,7 +585,7 @@ impl Sampler {
         let mut objectives = Vec::new();
         let (mut urn_ground, mut urn_pawn, mut urn_delivery) = (None, None, None);
         let (mut rift_spawner, mut rift_open, mut rift_spawned_at) = (None, None, None);
-        let (mut sinners, mut powerups) = (Vec::new(), Vec::new());
+        let (mut sinners, mut powerups, mut pickups) = (Vec::new(), Vec::new(), Vec::new());
         for (&index, e) in entities.iter() {
             if e.serializer_name_heq(PAWN) {
                 let hero = int(e, key!("m_CCitadelHeroComponent", "m_spawnedHero", "m_nHeroID"))
@@ -545,7 +596,7 @@ impl Sampler {
                 }
             } else if let Some(&(_, kind)) = OBJECTIVES.iter().find(|(hash, _)| e.serializer_name_heq(*hash)) {
                 let hp = int32(e, key!("m_iHealth")).unwrap_or(0);
-                let Some((x, y)) = position(e) else { continue };
+                let Some((x, y, z)) = origin(e) else { continue };
                 if hp <= 0 {
                     continue;
                 }
@@ -556,12 +607,13 @@ impl Sampler {
                     lane: int32(e, key!("m_iLane")),
                     x: x.round(),
                     y: y.round(),
+                    z: z.map(f32::round),
                     hp,
                     max_hp: int32(e, key!("m_iMaxHealth")).unwrap_or(hp).max(hp),
                 });
             } else if e.serializer_name_heq(URN) {
                 if urn_ground.is_none() {
-                    urn_ground = position(e);
+                    urn_ground = origin(e);
                     if let Some(v) = int32(e, key!("m_nCurrencyValue")).filter(|&v| v > 0) {
                         self.urn_value = Some(v);
                     }
@@ -569,15 +621,22 @@ impl Sampler {
             } else if e.serializer_name_heq(SINNER) {
                 // A cracked sacrifice keeps 1 health until its camp comes back.
                 let hp = int32(e, key!("m_iHealth")).unwrap_or(0);
-                if let (Some((x, y)), true) = (position(e), hp > 1) {
+                if let (Some((x, y, z)), true) = (origin(e), hp > 1) {
                     let max_hp = int32(e, key!("m_iMaxHealth")).unwrap_or(hp).max(hp);
-                    sinners.push(Sinner { x: x.round(), y: y.round(), hp, max_hp });
+                    sinners.push(Sinner { x: x.round(), y: y.round(), z: z.map(f32::round), hp, max_hp });
                 }
             } else if e.serializer_name_heq(POWERUP_SPAWNER) {
                 if e.get_value::<bool>(&key!("m_bPowerupActive")) == Some(true)
-                    && let Some((x, y)) = position(e)
+                    && let Some((x, y, z)) = origin(e)
                 {
-                    powerups.push(Powerup { x: x.round(), y: y.round() });
+                    powerups.push(Powerup { x: x.round(), y: y.round(), z: z.map(f32::round), kind: None });
+                }
+            } else if e.serializer_name_heq(POWERUP_PICKUP) {
+                let subclass = e.get_value::<u64>(&key!("m_nSubclassID"));
+                if let Some(&(_, kind)) = POWERUP_KINDS.iter().find(|(id, _)| Some(*id) == subclass)
+                    && let Some((x, y, _)) = origin(e)
+                {
+                    pickups.push((x, y, kind));
                 }
             } else if e.serializer_name_heq(URN_CARRIED) {
                 // Attached to the carrier's hero.
@@ -588,17 +647,18 @@ impl Sampler {
                     .map(ehandle_to_index);
             } else if e.serializer_name_heq(URN_DELIVERY) {
                 if e.get_value::<bool>(&key!("m_bDisabled")) == Some(false) {
-                    urn_delivery = position(e);
+                    urn_delivery = origin(e);
                 }
             } else if e.serializer_name_heq(RIFT_SPAWNER) {
                 if rift_spawner.is_none() {
-                    rift_spawner = position(e);
+                    rift_spawner = origin(e);
                     rift_spawned_at = e.get_value::<f32>(&key!("m_flCreateTime"));
                 }
             } else if e.serializer_name_heq(RIFT_OPEN) && e.get_value::<bool>(&key!("m_bDisabled")) != Some(true) {
-                rift_open = rift_open.or_else(|| position(e));
+                rift_open = rift_open.or_else(|| origin(e));
             }
         }
+        powerup_kinds(&mut powerups, &pickups);
 
         // Server time, which respawn and cooldown timestamps use.
         let now = self.clock.net_tick as f32 * self.clock.tick_interval.unwrap_or(1.0 / 64.0);
@@ -615,7 +675,7 @@ impl Sampler {
             let Some(team) = team(c) else { continue };
             let account_id = c.get_value::<u64>(&key!("m_steamID")).map(steam_to_account).unwrap_or_default();
             let alive = c.get_value::<bool>(&key!("m_PlayerDataGlobal", "m_bAlive")).unwrap_or(true);
-            let pos = pawns.get(&(hero_id, team)).and_then(|p| position(p));
+            let pos = pawns.get(&(hero_id, team)).and_then(|p| origin(p));
             let respawn = c.get_value::<f32>(&key!("m_PlayerDataGlobal", "m_flRespawnTime"));
             let raw_abilities = abilities(c);
             let ability_list = ability_states(&raw_abilities);
@@ -639,6 +699,7 @@ impl Sampler {
                 abilities: ability_list,
                 x: pos.map(|p| p.0.round()),
                 y: pos.map(|p| p.1.round()),
+                z: pos.and_then(|p| p.2).map(f32::round),
                 hp: data("m_iHealth"),
                 max_hp: data("m_iHealthMax"),
                 souls: data("m_iGold"),
@@ -671,16 +732,25 @@ impl Sampler {
 
         // The urn: carried (at the carrier), on the ground, or not in play.
         let carrier = urn_pawn.and_then(|i| self.account_of_pawn(ctx, i));
-        let delivery = urn_delivery.map(|(x, y): (f32, f32)| [x.round(), y.round()]);
+        let delivery = urn_delivery.map(|(x, y, _)| [x.round(), y.round()]);
+        let delivery_z = urn_delivery.and_then(|(_, _, z)| z).map(f32::round);
         let value = self.urn_value;
         let urn = match carrier {
             Some(a) => players
                 .iter()
                 .find(|p| p.account_id == a)
-                .and_then(|p| p.x.zip(p.y))
-                .or_else(|| self.previous_urn.as_ref().map(|u| (u.x, u.y)))
-                .map(|(x, y)| Urn { x, y, carrier: Some(a), delivery, value }),
-            None => urn_ground.map(|(x, y)| Urn { x: x.round(), y: y.round(), carrier: None, delivery, value }),
+                .and_then(|p| Some((p.x?, p.y?, p.z)))
+                .or_else(|| self.previous_urn.as_ref().map(|u| (u.x, u.y, u.z)))
+                .map(|(x, y, z)| Urn { x, y, z, carrier: Some(a), delivery, delivery_z, value }),
+            None => urn_ground.map(|(x, y, z)| Urn {
+                x: x.round(),
+                y: y.round(),
+                z: z.map(f32::round),
+                carrier: None,
+                delivery,
+                delivery_z,
+                value,
+            }),
         };
         if urn.is_none() {
             self.urn_value = None;
@@ -689,12 +759,14 @@ impl Sampler {
         // spot; the entities stand a little off it.
         let rules = &self.rift_rules;
         let until = |t: f32| (t > 0.0 && t < UNSET).then(|| (t - now).max(0.0).round());
+        let spot = |(x, y, z): (f32, f32, Option<f32>)| rules.location.map_or((x, y, z), |[x, y, z]| (x, y, Some(z)));
         let rift = match (rift_open, rift_spawner) {
             (Some(at), _) => {
-                let [x, y] = rules.location.unwrap_or([at.0, at.1]);
+                let (x, y, z) = spot(at);
                 Some(Rift {
                     x: x.round(),
                     y: y.round(),
+                    z: z.map(f32::round),
                     open: true,
                     opens_in_s: None,
                     progress: rules.progress,
@@ -705,10 +777,11 @@ impl Sampler {
                 })
             }
             (None, Some(at)) => {
-                let [x, y] = rules.location.unwrap_or([at.0, at.1]);
+                let (x, y, z) = spot(at);
                 Some(Rift {
                     x: x.round(),
                     y: y.round(),
+                    z: z.map(f32::round),
                     open: false,
                     opens_in_s: rift_spawned_at.and_then(|t| until(t + RIFT_OPENS_AFTER_S)),
                     progress: [0.0; 2],
@@ -728,7 +801,7 @@ impl Sampler {
             self.pending.extend(urn_events(time_s, self.previous_urn.as_ref(), urn.as_ref(), team_of_player));
             self.pending.extend(rift_events(time_s, self.previous_rift.as_ref(), rift.as_ref(), captured_now, self.rift_captured));
         }
-        let (camps, midboss_respawn_in_s) = camps_at(&self.camp_timers, now);
+        let (camps, midboss_respawn_in_s, midboss_z) = camps_at(&self.camp_timers, now);
         self.rift_captured = rift.is_some() && (self.rift_captured || captured_now.is_some());
         self.previous_scoring_time = self.rift_rules.scoring_time;
         self.previous_urn = urn.clone();
@@ -762,6 +835,7 @@ impl Sampler {
             rift,
             camps,
             midboss_respawn_in_s,
+            midboss_z,
             sinners,
             powerups,
             events: std::mem::take(&mut self.pending),
@@ -947,6 +1021,20 @@ mod tests {
     }
 
     #[test]
+    fn heights_use_the_same_cells_as_x_and_y() {
+        // Cells and offsets measured on live broadcasts (Nov 2026), against heights from elsewhere: deadlock-api's map
+        // and the camp timers in the game rules (plain vectors, no cells).
+        let near = |z: f32, reference: f32, within: f32| (z - reference).abs() <= within;
+        // The bridge power-ups: deadlock-api has them at z 912.
+        assert_eq!(world_coord(64, 912.0), 912.0);
+        // The Sinner's Sacrifices on the Chinatown roof (their camp: z 2499) and the sunken ones (camp: z -32).
+        assert!(near(world_coord(68, 448.031_25), 2499.0, 4.0));
+        assert!(near(world_coord(62, 992.031_25), -32.0, 0.1));
+        // The Mid-Boss in its pit (its camp timer: z -832).
+        assert!(near(world_coord(62, 201.093_75), -832.0, 10.0));
+    }
+
+    #[test]
     fn reads_the_match_id_from_a_broadcast_url() {
         assert_eq!(match_id_from_url("http://dist1-ord1.steamcontent.com/tv/127348911_412616904"), Some(127_348_911));
         assert_eq!(match_id_from_url("http://dist1-ord1.steamcontent.com/tv/127348911_412616904/"), Some(127_348_911));
@@ -993,8 +1081,8 @@ mod tests {
 
     #[test]
     fn urn_spawn_pickup_drop_and_delivery() {
-        let ground = Urn { x: 1.0, y: 2.0, carrier: None, delivery: None, value: Some(950) };
-        let carried = |a| Urn { x: 1.0, y: 2.0, carrier: Some(a), delivery: Some([6304.0, -96.0]), value: Some(950) };
+        let ground = Urn { x: 1.0, y: 2.0, z: Some(144.0), carrier: None, delivery: None, delivery_z: None, value: Some(950) };
+        let carried = |a| Urn { carrier: Some(a), delivery: Some([6304.0, -96.0]), delivery_z: Some(192.0), ..ground.clone() };
         let team = |a: u32| Some(if a == 1 { 0 } else { 1 });
         assert_eq!(names(&urn_events(0.0, None, Some(&ground), team)), ["urn_spawned"]);
         assert_eq!(names(&urn_events(0.0, Some(&ground), Some(&carried(1)), team)), ["urn_picked_up"]);
@@ -1010,6 +1098,7 @@ mod tests {
         let appearing = Rift {
             x: -7648.0,
             y: 0.0,
+            z: Some(420.0),
             open: false,
             opens_in_s: Some(70.0),
             progress: [0.0; 2],
@@ -1046,20 +1135,23 @@ mod tests {
     #[test]
     fn camp_timers_become_camps_and_the_midboss_respawn() {
         let timers = [
-            CampTimer { id: 0, x: 3248.0, y: -1888.0, next_spawn: -1.0, midboss: false }, // up
-            CampTimer { id: 1, x: -1.5, y: -0.8, next_spawn: 1420.0, midboss: true },
-            CampTimer { id: 2, x: -3520.0, y: -4384.0, next_spawn: 1100.4, midboss: false }, // down
-            CampTimer { id: 3, x: 1.0, y: 1.0, next_spawn: 990.0, midboss: false }, // due: about to be back
+            CampTimer { id: 0, x: 3248.0, y: -1888.0, z: 2499.0, next_spawn: -1.0, midboss: false }, // up, on a roof
+            CampTimer { id: 1, x: -1.5, y: -0.8, z: -832.0, next_spawn: 1420.0, midboss: true },
+            CampTimer { id: 2, x: -3520.0, y: -4384.0, z: 264.01, next_spawn: 1100.4, midboss: false }, // down
+            CampTimer { id: 3, x: 1.0, y: 1.0, z: 0.0, next_spawn: 990.0, midboss: false }, // due: about to be back
         ];
-        let (camps, midboss) = camps_at(&timers, 1000.0);
+        let (camps, midboss, midboss_z) = camps_at(&timers, 1000.0);
         assert_eq!(camps.iter().map(|c| (c.id, c.respawn_in_s)).collect::<Vec<_>>(), [(0, None), (2, Some(100.0)), (3, Some(0.0))]);
-        assert_eq!(midboss, Some(420.0));
-        assert_eq!(camps_at(&[CampTimer { midboss: true, next_spawn: -1.0, ..timers[1] }], 0.0).1, None);
+        assert_eq!(camps.iter().map(|c| c.z).collect::<Vec<_>>(), [2499.0, 264.0, 0.0]);
+        assert_eq!((midboss, midboss_z), (Some(420.0), Some(-832.0)));
+        // While the Mid-Boss is up: no countdown, but its spot's height is still known.
+        let (_, up, up_z) = camps_at(&[CampTimer { midboss: true, next_spawn: -1.0, ..timers[1] }], 0.0);
+        assert_eq!((up, up_z), (None, Some(-832.0)));
     }
 
     #[test]
     fn rift_locations_ignore_valves_placeholders() {
-        assert_eq!(valid_location([-7648.0, 0.0, 420.0]), Some([-7648.0, 0.0]));
+        assert_eq!(valid_location([-7648.0, 0.0, 420.0]), Some([-7648.0, 0.0, 420.0]));
         assert_eq!(valid_location([f32::MAX, f32::MAX, f32::MAX]), None); // after a capture
         assert_eq!(valid_location([0.0, 0.0, 0.0]), None); // before the first rift
     }
@@ -1069,5 +1161,47 @@ mod tests {
         let clock = Clock { net_tick: 64 * 100, tick_interval: Some(1.0 / 64.0), game_start: Some(20.0), paused: false, total_paused_ticks: 64 * 10 };
         assert_eq!(clock.game_time(), Some(70.0));
         assert_eq!(Clock::default().game_time(), None);
+    }
+
+    /// The game's hash of a vdata subclass name (MurmurHash2, seed 0x31415926).
+    fn subclass_id(name: &str) -> u64 {
+        const M: u32 = 0x5bd1_e995;
+        let data = name.as_bytes();
+        let mut h = 0x3141_5926_u32 ^ data.len() as u32;
+        let (chunks, rest) = data.as_chunks::<4>();
+        for c in chunks {
+            let mut k = u32::from_le_bytes(*c).wrapping_mul(M);
+            k ^= k >> 24;
+            h = h.wrapping_mul(M) ^ k.wrapping_mul(M);
+        }
+        if !rest.is_empty() {
+            for (i, &b) in rest.iter().enumerate() {
+                h ^= u32::from(b) << (8 * i);
+            }
+            h = h.wrapping_mul(M);
+        }
+        h ^= h >> 13;
+        h = h.wrapping_mul(M);
+        u64::from(h ^ (h >> 15))
+    }
+
+    #[test]
+    fn power_up_kinds_are_the_games_subclass_ids() {
+        for (id, kind) in POWERUP_KINDS {
+            assert_eq!(subclass_id(&format!("{kind}_powerup_pickup")), id, "{kind}");
+        }
+        // Seen on a live broadcast (Nov 2026): the gun power-up's pickup.
+        assert_eq!(subclass_id("gun_powerup_pickup"), 201_785_745);
+    }
+
+    #[test]
+    fn power_ups_take_the_kind_of_the_pickup_on_their_spot() {
+        let at = |x: f32, y: f32| Powerup { x, y, z: Some(912.0), kind: None };
+        // The two bridges, as on live broadcasts, and a third spot with no bridge pickup.
+        let mut powerups = [at(-3936.0, 136.0), at(3936.0, -128.0), at(0.0, 0.0)];
+        // Pickups at the bridges (one a few units off), and one elsewhere.
+        let pickups = [(3936.0, -128.0, "gun"), (-3930.0, 140.0, "casting"), (-800.0, 2200.0, "survival")];
+        powerup_kinds(&mut powerups, &pickups);
+        assert_eq!(powerups.map(|p| p.kind), [Some("casting"), Some("gun"), None]);
     }
 }
