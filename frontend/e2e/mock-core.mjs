@@ -30,7 +30,6 @@ function replay(path, time) {
 }
 const MATCH_ID = '424242';
 const POWERUP_KINDS = ['gun', 'survival', 'casting', 'movement'];
-const START = Math.floor(Date.now() / 1000) - 900;
 
 // ---------------------------------------------------------------- heights: the 3D view's map model, raycast down
 /** The highest walkable surface (facing up) at world (x, y) between `low` and `high`, or null. */
@@ -97,27 +96,49 @@ let seed = 7;
 const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
 
 // ---------------------------------------------------------------- the match
-const heroIds = Object.entries(assets.heroes).filter(([, h]) => h.minimap || h.icon).map(([id]) => +id).slice(0, 12);
-const abilityIds = Object.keys(assets.abilities).map(Number);
-const itemIds = Object.keys(assets.items).map(Number);
+// Each hero's own four abilities, in slot order (from deadlock-api's heroes).
+const heroAbilities = fixture('hero_abilities.json');
+const heroIds = Object.entries(assets.heroes)
+  .filter(([id, h]) => (h.minimap || h.icon) && heroAbilities[id])
+  .map(([id]) => +id)
+  .slice(0, 12);
+// The items the shop sells. The assets also hold removed ones (some under internal names, with other items' art) and
+// Street Brawl's own, which no hero in a normal match can have.
+const shop = Object.entries(assets.items)
+  .filter(([, item]) => item.shop)
+  .map(([id, item]) => ({ id: +id, tier: item.tier }));
+/** A hero's build: `count` different items the shop sells, two of each tier from the cheapest up. */
+function build(count) {
+  const items = [];
+  for (let k = 0; k < count; k++) {
+    const tier = Math.min(4, 1 + Math.floor(k / 2));
+    const choices = shop.filter((s) => s.tier === tier && !items.includes(s.id));
+    items.push(choices[Math.floor(rnd() * choices.length)].id);
+  }
+  return items;
+}
 const NAMES = ['Brass Fox', 'Night Owl', 'Copper', 'Lantern', 'Gearwork', 'Sootfall', 'Marrow', 'Velvet', 'Ash Moth', 'Tinsel', 'Rook', 'Quill'];
-const players = heroIds.map((hero, i) => ({
-  account_id: 1000 + i,
-  team: i < 6 ? 0 : 1,
-  hero_id: hero,
-  name: NAMES[i],
-  avatar: null,
-  badge: 100 + (i % 6),
-  lane: i % 3,
-  side: (i % 6) < 3 ? -1 : 1,
-  phase: rnd() * Math.PI * 2,
-  speed: 0.04 + rnd() * 0.05,
-  abilities: [0, 1, 2, 3].map(() => abilityIds[Math.floor(rnd() * abilityIds.length)]),
-  items: Array.from({ length: 3 + (i % 5) }, () => itemIds[Math.floor(rnd() * itemIds.length)]),
-  deadUntil: 0,
-  kills: Math.floor(rnd() * 5), deaths: Math.floor(rnd() * 5), assists: Math.floor(rnd() * 8),
-  net_worth: 8000 + Math.floor(rnd() * 6000),
-}));
+const players = heroIds.map((hero, i) => {
+  const score = { kills: Math.floor(rnd() * 5), deaths: Math.floor(rnd() * 5), assists: Math.floor(rnd() * 8) };
+  return {
+    account_id: 1000 + i,
+    team: i < 6 ? 0 : 1,
+    hero_id: hero,
+    name: NAMES[i],
+    avatar: null,
+    badge: 100 + (i % 6),
+    lane: i % 3,
+    side: (i % 6) < 3 ? -1 : 1,
+    phase: rnd() * Math.PI * 2,
+    speed: 0.04 + rnd() * 0.05,
+    abilities: heroAbilities[hero],
+    items: build(3 + (i % 5)),
+    deadUntil: 0,
+    start: score, // the score the match starts with, again each time it starts over
+    ...score,
+    net_worth: 8000 + Math.floor(rnd() * 6000),
+  };
+});
 
 /** Point at share t (0 south … 1 north) along a lane polyline, and the direction there. */
 function along(points, t) {
@@ -147,20 +168,43 @@ let oid = 1;
 const objectives = realObjectives.map((o) => {
   const max = MAX_HP[o.kind] ?? 5000;
   const hp = o.kind === 'midboss' ? 41000 : Math.round(max * (0.35 + rnd() * 0.65));
-  return { id: oid++, ...o, hp, max_hp: max };
+  return { id: oid++, ...o, hp, max_hp: max, start_hp: hp };
 });
 
 const camps = assets.map.camps.map((c, i) => ({ id: i + 1, x: c.x, y: c.y, z: heights.camps[i] ?? null, kind: c.kind, downUntil: rnd() < 0.3 ? 30 + rnd() * 250 : 0 }));
 const urnSpawn = assets.map.urn_spawns?.[0] ?? [0, 0];
 const urnSpawnZ = surface(urnSpawn[0], urnSpawn[1], -600, 1500);
 
+// ---------------------------------------------------------------- the clock
+// The match is at 15:00 when someone comes to watch, and goes on in real time while anyone does. Once nobody has
+// watched for a few seconds it starts over, so it never runs on for hours (but never goes back while someone
+// watches: the page drops frames older than the last).
+let t0 = Date.now();
+let watching = 0;
+let idleSince = Date.now();
+let lastEvent = { kill: 0, buy: 0 };
+const gameTime = () => 900 + (Date.now() - t0) / 1000;
+
+function watch() {
+  if (watching++ === 0 && Date.now() - idleSince > 3000) startOver();
+}
+
+function unwatch() {
+  if (--watching === 0) idleSince = Date.now();
+}
+
+function startOver() {
+  t0 = Date.now();
+  lastEvent = { kill: 0, buy: 0 };
+  for (const p of players) Object.assign(p, { deadUntil: 0 }, p.start);
+  for (const o of objectives) o.hp = o.start_hp;
+}
+
 // ---------------------------------------------------------------- one frame
 let tick = 0;
-const t0 = Date.now();
-const lastEvent = { kill: 0, buy: 0 };
 
 function frame() {
-  const time = 900 + (Date.now() - t0) / 1000;
+  const time = gameTime();
   tick = Math.round(time * 64);
   const events = [];
   const framePlayers = players.map((p, i) => {
@@ -235,7 +279,7 @@ function frame() {
     net_worth: nw,
     winning_team: null,
     players: framePlayers,
-    objectives: objectives.map(({ ...o }) => o),
+    objectives: objectives.map(({ start_hp: _start, ...o }) => o),
     urn: carrier.alive
       ? { x: carrier.x, y: carrier.y, z: carrier.z, carrier: carrier.account_id, delivery: assets.map.urn_pads[0], delivery_z: heights.urn_pads[0], value: 950 }
       : { x: urnSpawn[0], y: urnSpawn[1], z: urnSpawnZ, carrier: null, delivery: null, delivery_z: null, value: 950 },
@@ -266,7 +310,7 @@ function frame() {
 const summary = () => {
   const f = frame();
   return {
-    match_id: MATCH_ID, start_time: START, elapsed_s: Math.floor(Date.now() / 1000) - START, match_mode: 'ranked', game_mode: 'normal',
+    match_id: MATCH_ID, start_time: Math.floor(t0 / 1000) - 900, elapsed_s: Math.floor(gameTime()), match_mode: 'ranked', game_mode: 'normal',
     region: 'europe', spectators: 31, match_score: 2100, net_worth: f.net_worth, objectives_alive: [12, 12], winning_team: null,
     team_badges: [104, 105], badge: 105, tracked: false,
     players: players.map(({ account_id, team, hero_id, name, avatar, badge }) => ({ account_id, team, hero_id, name, avatar, badge })),
@@ -328,17 +372,25 @@ server.on('upgrade', (req, socket) => {
       if (op !== 1) continue;
       const msg = JSON.parse(data.toString());
       if (msg.op === 'subscribe' && msg.topic === `watch:${MATCH_ID}` && !timers.has(msg.topic)) {
+        watch();
         send(socket, { topic: msg.topic, seq: seq++, type: 'SUBSCRIBED' });
         timers.set(msg.topic, setInterval(() => send(socket, { topic: msg.topic, seq: seq++, ts: new Date().toISOString(), type: 'LIVE_FRAME', data: frame() }), 500));
       } else if (msg.op === 'subscribe') {
         send(socket, { topic: msg.topic, seq: seq++, type: 'SUBSCRIBED' });
-      } else if (msg.op === 'unsubscribe') {
+      } else if (msg.op === 'unsubscribe' && timers.has(msg.topic)) {
         clearInterval(timers.get(msg.topic));
         timers.delete(msg.topic);
+        unwatch();
       }
     }
   });
-  const stop = () => { for (const t of timers.values()) clearInterval(t); timers.clear(); };
+  const stop = () => {
+    for (const t of timers.values()) {
+      clearInterval(t);
+      unwatch();
+    }
+    timers.clear();
+  };
   socket.on('close', stop);
   socket.on('error', stop);
 });

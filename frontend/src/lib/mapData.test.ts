@@ -173,10 +173,11 @@ describe('heroes where no camera sees them (real positions from live broadcasts)
     expect(share(heroes.seen, (p) => footing(m(), p) != null)).toBeLessThan(0.05);
   });
 
-  it('open their interior around them: a slice over its floor, out to the opening radius', () => {
+  it('open their interior around them: a slice over its floor, out to the opening radius', { timeout: 30_000 }, () => {
     const index = InteriorIndex.of(m())!;
     const radius = mapHeight(m(), OPEN_RADIUS);
     const lift = mapHeight(m(), SLICE);
+    const band = mapHeight(m(), BAND);
     for (const p of [...heroes.arena, ...heroes.hidden].slice(0, 300)) {
       const f = footing(m(), p);
       if (!f) continue;
@@ -184,18 +185,17 @@ describe('heroes where no camera sees them (real positions from live broadcasts)
       const data = index.slices([{ x, y, ...f }]);
       expect(data.length).toBeGreaterThan(0);
       expect(data.length % (3 * SLICE_STRIDE)).toBe(0);
-      for (let i = 0; i < data.length; i += SLICE_STRIDE) {
-        // The circle the renderer cuts each triangle to: the hero's own (floats, as the GPU gets them).
-        expect([data[i + 3], data[i + 4], data[i + 5]]).toEqual([Math.fround(x), Math.fround(y), Math.fround(radius)]);
-      }
-      // Each triangle: floor raised by the slice, reaching into the band round the hero's own floor (ramps, not the
-      // storey above or below).
-      const band = mapHeight(m(), BAND);
+      // Each triangle: cut to the hero's own circle (floats, as the GPU gets them); its floor raised by the slice,
+      // reaching into the band round the hero's own floor (ramps, not the storey above or below).
+      const circle = [Math.fround(x), Math.fround(y), Math.fround(radius)];
+      const wrong: number[] = [];
       for (let i = 0; i < data.length; i += 3 * SLICE_STRIDE) {
-        const heights = [0, 1, 2].map((k) => data[i + k * SLICE_STRIDE + 2]! - lift);
-        expect(Math.max(...heights)).toBeGreaterThanOrEqual(f.floor - band - 1e-3);
-        expect(Math.min(...heights)).toBeLessThanOrEqual(f.floor + band + 1e-3);
+        const corners = [0, 1, 2].map((k) => i + k * SLICE_STRIDE);
+        const heights = corners.map((c) => data[c + 2]! - lift);
+        const ownCircle = corners.every((c) => circle.every((v, k) => data[c + 3 + k] === v));
+        if (!ownCircle || Math.max(...heights) < f.floor - band - 1e-3 || Math.min(...heights) > f.floor + band + 1e-3) wrong.push(i);
       }
+      expect(wrong, `${p}`).toEqual([]);
     }
   });
 

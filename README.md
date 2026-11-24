@@ -312,6 +312,11 @@ soft edges.
 Item and objective icons are the game's current art from the [Deadlock Wiki](https://deadlock.wiki), stored as small
 WebP files in `frontend/public/icons/`. Refresh them after a patch with `python frontend/scripts/wiki_icons.py` (needs
 Pillow; `--objectives` refreshes only the map objectives' icons). Items the wiki has no icon for keep deadlock-api's.
+Every item the shop sells has the wiki's icon and the same name as the wiki's item data (`Data:ItemData.json`, keyed
+by the game's class names, as deadlock-api's items are), checked for all of them and for every item the bot reported
+in nine live matches. deadlock-api's list also holds about 80 items no hero in a normal match can have: removed ones
+(some still under internal names such as `upgrade_weapon_instant_reload`, with other items' art) and Street Brawl's
+own (the wiki has no icons for those). The live service's assets mark the items the shop sells (`shop`).
 Base guardians look nothing like lane guardians, and each team's are a different statue, but the wiki's "Base
 Guardian.png" is the lane guardian's picture: so each team's base guardian icon is cut from the wiki's screenshot of
 that team's pair.
@@ -531,11 +536,11 @@ cd live && python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"   # bin
 .venv/Scripts/python -m pytest && .venv/Scripts/python -m mypy naebka_live tests
 .venv/Scripts/python -m pytest --cov=naebka_live --cov-report=html   # coverage: live/htmlcov/index.html
 
-# Frontend (no local Node needed): types, lint, 90 unit tests (the A/B statistics; the realtime map's camera,
-# playback, terrain, models, interiors, power-ups, and the map files it ships, with real heroes' positions), build
+# Frontend (no local Node needed): types, lint, 92 unit tests (the A/B statistics; the realtime map's camera,
+# playback, terrain, models, interiors, power-ups, items, and the map files it ships, with real heroes' positions), build
 docker run --rm -v "$PWD/frontend:/app" -w /app node:22-alpine sh -c "npm install && npx tsc --noEmit && npx vp lint src && npx vp test run && npm run build"
 
-# Realtime map in a real browser: 13 Playwright tests in Chromium (WebGL in software) against the mock core
+# Realtime map in a real browser: 14 Playwright tests in Chromium (WebGL in software) against the mock core
 # (frontend/e2e/mock-core.mjs, a simulated match); its own node_modules, as Playwright's image is not Alpine
 docker run --rm --ipc=host -v "$PWD/frontend:/app" -v naebka-fe-nm-pw:/app/node_modules -w /app mcr.microsoft.com/playwright:v1.65.1-noble sh -c "npm ci && npx playwright test"
 
@@ -580,7 +585,8 @@ What the realtime map's tests prove (CI runs them all: `frontend`, `frontend-bro
   interior opens to show its floor inside a rim and closes again, with and without shadows; in the real map (both
   qualities) heroes in the Mid-Boss hall, tunnels and halls open theirs while the rest of the view stays as it was; the
   objects and the 2.5D terrain draw. On the live match page (mock core, nothing fetched from outside): the 2D map has
-  every hero and both power-ups with their kinds; the 3D view loads and draws the map, with every hero, and heroes in
+  every hero and both power-ups with their kinds; in Builds, every hero has its own four abilities and different items
+  the shop sells, with the wiki's icons; the match starts at 15:00 for whoever comes to watch; the 3D view loads and draws the map, with every hero, and heroes in
   interiors open them; following a hero in the hall zooms in and keeps it in the middle; High quality loads the
   detailed map; the 2.5D view raises buildings and lays them flat; scrolling zooms, double-click goes back to the whole
   map, and the view is remembered; and the page reports no errors.

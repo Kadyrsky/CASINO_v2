@@ -305,7 +305,11 @@ export interface LiveDirectory {
 export interface LiveAssets {
   heroes: Record<string, { name: string; icon: string | null; minimap: string | null; color: [number, number, number] | null }>;
   ranks: Record<string, { name: string; image: string | null; color: string | null }>;
-  items: Record<string, { name: string; image: string | null; tier: number | null; slot: string | null }>;
+  /**
+   * Every upgrade, by id. `shop` marks those the shop sells (missing in assets cached before it); the others are
+   * removed items, some under internal names, and Street Brawl's own.
+   */
+  items: Record<string, { name: string; image: string | null; tier: number | null; slot: string | null; shop?: boolean }>;
   /** Heroes' own abilities (missing in assets the watcher cached before abilities were added). */
   abilities?: Record<string, { name: string; image: string | null }>;
   map: {
