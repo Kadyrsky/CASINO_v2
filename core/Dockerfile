@@ -22,7 +22,7 @@ RUN mkdir -p /music \
     && if [ "$MUSIC" = "skip" ]; then python /wiki_music.py --out /music --offline; \
        else python /wiki_music.py --out /music --require; fi
 
-FROM maven:3.9-eclipse-temurin-21 AS build
+FROM maven:3.9-eclipse-temurin-26 AS build
 WORKDIR /src
 COPY core/pom.xml .
 RUN mvn -q -B dependency:go-offline
