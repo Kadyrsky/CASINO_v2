@@ -114,10 +114,27 @@ jobs:
       - run: npm ci && npx hardhat test
         working-directory: contracts
 
+  security:
+    name: Security (dependency vulnerabilities)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Every lockfile (Java, npm, Rust, contracts): fail on a HIGH or CRITICAL vulnerability that has a fix.
+      # Dependabot (.github/dependabot.yml) opens the pull requests that bring those fixes in.
+      - run: >-
+          docker run --rm -v "$PWD:/src:ro" aquasec/trivy:0.57.1 fs --quiet --exit-code 1
+          --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed /src
+      - uses: actions/setup-node@v5
+        with: { node-version: "22" }
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: frontend
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: contracts
+
   images:
     name: Build and push images
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    needs: [core, live, frontend, frontend-browser, contracts]
+    needs: [core, live, frontend, frontend-browser, contracts, security]
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -48,6 +48,9 @@ test.afterEach(() => {
 
 async function openMatch(page: Page, view: '2D' | '2.5D' | '3D'): Promise<Locator> {
   await page.goto(MATCH);
+  // A visitor who isn't logged in first sees the play-money notice (components/Disclaimer.tsx), over the whole page:
+  // read, and accepted for this visit, as anyone would.
+  await page.getByRole('dialog', { name: 'Before you start' }).getByRole('button', { name: 'I understand, continue' }).click();
   await page.getByRole('radiogroup', { name: 'Map view' }).getByRole('radio', { name: view, exact: true }).click();
   await expect(page.getByRole('radio', { name: view, exact: true })).toHaveAttribute('aria-checked', 'true');
   return page.locator('[aria-roledescription="map"]');

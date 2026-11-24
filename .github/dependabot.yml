@@ -1,0 +1,30 @@
+# Dependabot: weekly pull requests that update dependencies, so known vulnerabilities get fixed (OWASP A06,
+# vulnerable and outdated components). Security fixes also arrive as soon as an advisory is published.
+version: 2
+updates:
+  - package-ecosystem: maven
+    directory: /core
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /contracts
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3
+  - package-ecosystem: pip
+    directory: /live
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3
+  - package-ecosystem: cargo
+    directory: /deadlock-bot
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3
+  - package-ecosystem: docker
+    directories: [/core, /live, /deadlock-bot]
+    schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }

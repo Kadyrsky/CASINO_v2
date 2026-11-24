@@ -521,13 +521,37 @@ three kinds of evidence; the reasoning, the numbers and a **test-day checklist**
 - **Logged-in players** keep their versions across devices: after login the site takes over the visitor id and choices
   the account had before.
 
+## Security
+
+What protects the app, mapped to the OWASP Top 10 (2021):
+
+| OWASP | Risk | What the app does |
+|---|---|---|
+| A01 | Broken access control | Admin endpoints need the ADMIN role; every user endpoint acts only on the caller's own data |
+| A02 | Cryptographic failures | HTTPS everywhere (Caddy + Cloudflare, HSTS); bcrypt passwords; KYC document numbers kept only as an HMAC |
+| A03 | Injection | Every SQL query is parameterized; request bodies are validated; SolidJS escapes all output |
+| A04 | Insecure design | Append-only ledger, idempotency keys, suspend-then-reprice, KYC and deposit caps |
+| A05 | Security misconfiguration | Security headers on every response (CSP, X-Frame-Options, nosniff, Referrer-Policy, Permissions-Policy); API docs off in production; database and Redis not reachable from the internet; the server refuses to start without real secrets |
+| A06 | Vulnerable components | Dependabot updates; CI fails on any HIGH/CRITICAL dependency vulnerability with a fix (Trivy, npm audit) |
+| A07 | Authentication failures | Short-lived JWTs bound to a revocable session; lockout after 5 failed logins; login and sign-up rate limits per IP |
+| A08 | Integrity failures | Images are built in CI and tagged with the commit they come from; deploys over SSH with the server's host key pinned |
+| A09 | Logging and monitoring | Immutable audit log of admin actions; ledger reconciliation on the admin dashboard |
+| A10 | SSRF | The server only calls fixed, configured hosts (deadlock-api, the Steam bot, the Sepolia RPC) |
+
+Checked by `SecurityIT` (admin access, forged/unsigned/expired/wrongly signed tokens, another user's session, SQL
+injection attempts, the headers) and `RegistrationLimitIT`. Scan the dependencies yourself:
+
+```bash
+docker run --rm -v "$PWD:/src:ro" aquasec/trivy:0.57.1 fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed /src
+```
+
 ## Tests
 
 ```bash
-# Java: 76 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules,
+# Java: 78 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules,
 # deadlock-api -> Steam bot fallback, Ethereum signatures, deposit-log parsing, payout encoding and signing)
 cd core && mvn test
-# + 51 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
+# + 73 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
 cd core && mvn -Pit test
 # Coverage (JaCoCo) is written by both commands: core/target/site/jacoco/index.html
 
@@ -536,8 +560,9 @@ cd live && python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"   # bin
 .venv/Scripts/python -m pytest && .venv/Scripts/python -m mypy naebka_live tests
 .venv/Scripts/python -m pytest --cov=naebka_live --cov-report=html   # coverage: live/htmlcov/index.html
 
-# Frontend (no local Node needed): types, lint, 92 unit tests (the A/B statistics; the realtime map's camera,
-# playback, terrain, models, interiors, power-ups, items, and the map files it ships, with real heroes' positions), build
+# Frontend (no local Node needed): types, lint, 95 unit tests (A/B statistics, play-money notice; the realtime map's
+# camera, playback, terrain, models, interiors, power-ups, items, and the map files it ships, with real heroes'
+# positions), build
 docker run --rm -v "$PWD/frontend:/app" -w /app node:22-alpine sh -c "npm install && npx tsc --noEmit && npx vp lint src && npx vp test run && npm run build"
 
 # Realtime map in a real browser: 14 Playwright tests in Chromium (WebGL in software) against the mock core
@@ -571,6 +596,9 @@ settle" via the scripted `MatchSimulator`):
   required.
 * Realtime map: only admins, premium players and players with a big enough bet may watch; rosters are stored with
   the match and shown with names and ranks; the directory links matches that can be bet on.
+* WebSocket (a real client against the server, fan-out through Redis): auth and presence, which topics may be
+  subscribed, replay of missed messages with `lastSeq`, delivery only after commit, the realtime-map permission.
+* Chat: messages stored and pushed live on `chat:{room}`, login needed to post, 500-character limit, rate limit.
 * HTTP: RFC 7807 errors, logout revokes the JWT, slot spin is verifiable after seed rotation, poker buy-in/cash-out.
 
 What the realtime map's tests prove (CI runs them all: `frontend`, `frontend-browser`, `map-builder`, `bot`):
