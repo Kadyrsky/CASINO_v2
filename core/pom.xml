@@ -127,7 +127,7 @@
                 <!-- Code coverage: report in target/site/jacoco/index.html after mvn test (or mvn -Pit test) -->
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
-                <version>0.8.14</version>
+                <version>0.8.16</version>
                 <executions>
                     <execution>
                         <goals><goal>prepare-agent</goal></goals>
