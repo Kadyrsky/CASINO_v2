@@ -12,7 +12,7 @@ RUN rm -rf public/music && npm run build
 # from the Deadlock Wiki). The files there are used as they are; anything missing is fetched from the wiki, and if
 # music tracks are still missing the build stops and says what to do (a failed step isn't cached, so the next build
 # tries again). ffmpeg measures loudness the manifest lacks. NAEBKA_MUSIC=skip never contacts the wiki (CI uses it).
-FROM python:3.12-alpine AS music
+FROM python:3.15-alpine AS music
 RUN apk add --no-cache ffmpeg
 ARG MUSIC=fetch
 COPY frontend/scripts/wiki_music.py /wiki_music.py
