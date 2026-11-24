@@ -1,6 +1,6 @@
 # Built from the repository root (docker-compose: context ".", dockerfile core/Dockerfile), so it can include the
 # frontend: the core serves the built SolidJS app itself (config/FrontendConfig.java), no separate nginx container.
-FROM node:22-alpine AS frontend
+FROM node:26-alpine AS frontend
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm install --no-audit --no-fund
