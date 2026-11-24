@@ -20,6 +20,7 @@
     "solid-js": "^1.9.17"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.1",
     "@tailwindcss/vite": "^4.3.3",
     "openapi-typescript": "^7.13.0",
     "tailwindcss": "^4.3.3",

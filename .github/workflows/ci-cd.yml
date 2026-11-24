@@ -59,6 +59,51 @@ jobs:
       - run: npm install --no-audit --no-fund && npx tsc --noEmit && npx vp lint src && npx vp test run && npm run build
         working-directory: frontend
 
+  # The realtime map in a real Chromium (WebGL in software) against the mock core: frontend/e2e.
+  frontend-browser:
+    name: Frontend (live map in a browser, Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: "22", cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: npm install --no-audit --no-fund && npx playwright install --with-deps chromium
+        working-directory: frontend
+      - run: npx tsc --noEmit -p e2e && npx vp lint e2e playwright.config.ts && npx playwright test
+        working-directory: frontend
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with: { name: playwright-report, path: frontend/playwright-report, retention-days: 14 }
+
+  # The 3D map's builder (frontend/scripts/map_model.py) on made-up maps; the files it made are tested by `frontend`.
+  map-builder:
+    name: Map builder (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.14" }
+      - run: pip install numpy pillow pytest && python -m pytest scripts/tests
+        working-directory: frontend
+
+  # The Steam bot isn't deployed from here (deadlock-bot/README.md), but its live frames feed the map: tests and lints.
+  bot:
+    name: Steam bot (cargo test, clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            deadlock-bot/target
+          key: bot-${{ runner.os }}-${{ hashFiles('deadlock-bot/Cargo.lock') }}
+          restore-keys: bot-${{ runner.os }}-
+      - run: cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
+        working-directory: deadlock-bot
+
   contracts:
     name: Contracts (Hardhat)
     runs-on: ubuntu-latest
@@ -72,7 +117,7 @@ jobs:
   images:
     name: Build and push images
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    needs: [core, live, frontend, contracts]
+    needs: [core, live, frontend, frontend-browser, contracts]
     runs-on: ubuntu-latest
     permissions:
       contents: read

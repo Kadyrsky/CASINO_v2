@@ -1,0 +1,218 @@
+[
+ {
+  "kind": "guardian",
+  "team": 0,
+  "lane": 1,
+  "x": -8192,
+  "y": -1856,
+  "z": 248.0
+ },
+ {
+  "kind": "guardian",
+  "team": 0,
+  "lane": 6,
+  "x": 7040,
+  "y": -1984,
+  "z": 256.0
+ },
+ {
+  "kind": "guardian",
+  "team": 1,
+  "lane": 6,
+  "x": 8128,
+  "y": 1856,
+  "z": 248.0
+ },
+ {
+  "kind": "guardian",
+  "team": 1,
+  "lane": 1,
+  "x": -7040,
+  "y": 1984,
+  "z": 248.0
+ },
+ {
+  "kind": "guardian",
+  "team": 0,
+  "lane": 4,
+  "x": 0,
+  "y": -1792,
+  "z": 384.0
+ },
+ {
+  "kind": "guardian",
+  "team": 1,
+  "lane": 4,
+  "x": 0,
+  "y": 1792,
+  "z": 384.0
+ },
+ {
+  "kind": "patron",
+  "team": 1,
+  "lane": 3,
+  "x": 1280,
+  "y": 8048,
+  "z": 632.0
+ },
+ {
+  "kind": "patron",
+  "team": 0,
+  "lane": 3,
+  "x": -1280,
+  "y": -8034,
+  "z": 632.0
+ },
+ {
+  "kind": "walker",
+  "team": 1,
+  "lane": 1,
+  "x": -5416,
+  "y": 5024,
+  "z": 432.0
+ },
+ {
+  "kind": "walker",
+  "team": 1,
+  "lane": 6,
+  "x": 6444,
+  "y": 4776,
+  "z": 376.0
+ },
+ {
+  "kind": "walker",
+  "team": 0,
+  "lane": 6,
+  "x": 5628,
+  "y": -5060,
+  "z": 400.0
+ },
+ {
+  "kind": "walker",
+  "team": 0,
+  "lane": 1,
+  "x": -6272,
+  "y": -4736,
+  "z": 384.0
+ },
+ {
+  "kind": "walker",
+  "team": 0,
+  "lane": 4,
+  "x": -1288,
+  "y": -3472,
+  "z": 376.0
+ },
+ {
+  "kind": "walker",
+  "team": 1,
+  "lane": 4,
+  "x": 1288,
+  "y": 3472,
+  "z": 376.0
+ },
+ {
+  "kind": "base_guardian",
+  "team": 0,
+  "lane": 4,
+  "x": -1072,
+  "y": -5454,
+  "z": 640.8410034179688
+ },
+ {
+  "kind": "base_guardian",
+  "team": 0,
+  "lane": 4,
+  "x": -1488,
+  "y": -5459,
+  "z": 640.8412475585938
+ },
+ {
+  "kind": "base_guardian",
+  "team": 0,
+  "lane": 6,
+  "x": 480,
+  "y": -6756,
+  "z": 641.1519775390625
+ },
+ {
+  "kind": "base_guardian",
+  "team": 0,
+  "lane": 6,
+  "x": 480,
+  "y": -6396,
+  "z": 641.1619873046875
+ },
+ {
+  "kind": "base_guardian",
+  "team": 0,
+  "lane": 1,
+  "x": -3040,
+  "y": -6396,
+  "z": 641.1619873046875
+ },
+ {
+  "kind": "base_guardian",
+  "team": 0,
+  "lane": 1,
+  "x": -3040,
+  "y": -6756,
+  "z": 641.1519775390625
+ },
+ {
+  "kind": "base_guardian",
+  "team": 1,
+  "lane": 4,
+  "x": 1496,
+  "y": 5454,
+  "z": 640.0
+ },
+ {
+  "kind": "base_guardian",
+  "team": 1,
+  "lane": 4,
+  "x": 1064,
+  "y": 5454,
+  "z": 640.0
+ },
+ {
+  "kind": "base_guardian",
+  "team": 1,
+  "lane": 1,
+  "x": -480,
+  "y": 6396,
+  "z": 640.0
+ },
+ {
+  "kind": "base_guardian",
+  "team": 1,
+  "lane": 1,
+  "x": -480,
+  "y": 6788,
+  "z": 640.0
+ },
+ {
+  "kind": "base_guardian",
+  "team": 1,
+  "lane": 6,
+  "x": 3040,
+  "y": 6396,
+  "z": 640.0
+ },
+ {
+  "kind": "base_guardian",
+  "team": 1,
+  "lane": 6,
+  "x": 3040,
+  "y": 6788,
+  "z": 640.0
+ },
+ {
+  "kind": "midboss",
+  "team": null,
+  "lane": null,
+  "x": 0,
+  "y": 0,
+  "z": -832.0
+ }
+]

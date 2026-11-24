@@ -526,15 +526,23 @@ cd core && mvn test
 cd core && mvn -Pit test
 # Coverage (JaCoCo) is written by both commands: core/target/site/jacoco/index.html
 
-# Python: 36 tests, mypy --strict
+# Python: 37 tests, mypy --strict
 cd live && python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"   # bin/ on Linux/macOS
 .venv/Scripts/python -m pytest && .venv/Scripts/python -m mypy naebka_live tests
 .venv/Scripts/python -m pytest --cov=naebka_live --cov-report=html   # coverage: live/htmlcov/index.html
 
-# Frontend (no local Node needed): types, lint, 17 unit tests (the A/B statistics), build
+# Frontend (no local Node needed): types, lint, 90 unit tests (the A/B statistics; the realtime map's camera,
+# playback, terrain, models, interiors, power-ups, and the map files it ships, with real heroes' positions), build
 docker run --rm -v "$PWD/frontend:/app" -w /app node:22-alpine sh -c "npm install && npx tsc --noEmit && npx vp lint src && npx vp test run && npm run build"
 
-# Steam bot: 35 unit tests (needs Rust and protoc, see deadlock-bot/README.md)
+# Realtime map in a real browser: 13 Playwright tests in Chromium (WebGL in software) against the mock core
+# (frontend/e2e/mock-core.mjs, a simulated match); its own node_modules, as Playwright's image is not Alpine
+docker run --rm --ipc=host -v "$PWD/frontend:/app" -v naebka-fe-nm-pw:/app/node_modules -w /app mcr.microsoft.com/playwright:v1.65.1-noble sh -c "npm ci && npx playwright test"
+
+# The 3D map's builder: 11 tests on made-up maps (Python 3.14, numpy, Pillow)
+cd frontend && python -m pytest scripts/tests
+
+# Steam bot: 38 unit tests (needs Rust and protoc, see deadlock-bot/README.md)
 cd deadlock-bot && cargo test
 
 # Cashier contract: 17 Hardhat tests (no local Node needed)
@@ -559,6 +567,28 @@ settle" via the scripted `MatchSimulator`):
 * Realtime map: only admins, premium players and players with a big enough bet may watch; rosters are stored with
   the match and shown with names and ranks; the directory links matches that can be bet on.
 * HTTP: RFC 7807 errors, logout revokes the JWT, slot spin is verifiable after seed rotation, poker buy-in/cash-out.
+
+What the realtime map's tests prove (CI runs them all: `frontend`, `frontend-browser`, `map-builder`, `bot`):
+
+* **The map files the site ships** (`src/lib/mapData.test.ts`): both 3D models and the objects file decode into the
+  views' space and stay small enough to send; the Mid-Boss hall's box is in the middle; every interior's floor is in
+  the model. With 1,120 real heroes' positions from live broadcasts (`e2e/fixtures/heroes.json`): heroes in the
+  Mid-Boss hall all stand in one interior, the hall; most heroes on floors no camera sees open an interior, hardly any
+  on floors cameras see do; each opening is its own interior's floor round the hero. Every objective the game places
+  has its spawn (for frames without heights) and every power-up kind its crystal skin.
+* **In a real browser** (`e2e/renderers.spec.ts`, `e2e/live-map.spec.ts`): every shader builds; in a made-up scene an
+  interior opens to show its floor inside a rim and closes again, with and without shadows; in the real map (both
+  qualities) heroes in the Mid-Boss hall, tunnels and halls open theirs while the rest of the view stays as it was; the
+  objects and the 2.5D terrain draw. On the live match page (mock core, nothing fetched from outside): the 2D map has
+  every hero and both power-ups with their kinds; the 3D view loads and draws the map, with every hero, and heroes in
+  interiors open them; following a hero in the hall zooms in and keeps it in the middle; High quality loads the
+  detailed map; the 2.5D view raises buildings and lays them flat; scrolling zooms, double-click goes back to the whole
+  map, and the view is remembered; and the page reports no errors.
+* **The builder** (`scripts/tests/test_map_model.py`): it reads the nav mesh's polygons for one agent hull with their
+  links (and gives up on other files); interiors are the nav polygons on floors no camera sees; floors meeting at a
+  step or a drop are one interior, storeys and rooms apart aren't; holes round pillars and gaps between polygons are
+  filled at the floor's height, courtyards and the floor's surroundings aren't; an interior keeps its floor and walls
+  but not its cover; a floor under a roof is hidden from every camera; simplifying keeps buildings' corners sharp.
 
 ## Where each design document lives in the code
 
