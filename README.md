@@ -455,7 +455,7 @@ docker run --rm -v "$PWD:/src:ro" aquasec/trivy:0.57.1 fs --scanners vuln --seve
 # Java: 78 unit tests (poker rules, hand evaluator, side pots, slot RTP simulation, provable fairness, money, KYC rules,
 # deadlock-api -> Steam bot fallback, Ethereum signatures, deposit-log parsing, payout encoding and signing)
 cd core && mvn test
-# + 58 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
+# + 73 integration tests on real Postgres/Redis containers (Testcontainers; needs Docker)
 cd core && mvn -Pit test
 # Coverage (JaCoCo) is written by both commands: core/target/site/jacoco/index.html
 
@@ -464,7 +464,7 @@ cd live && python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"   # bin
 .venv/Scripts/python -m pytest && .venv/Scripts/python -m mypy naebka_live tests
 .venv/Scripts/python -m pytest --cov=naebka_live --cov-report=html   # coverage: live/htmlcov/index.html
 
-# Frontend (no local Node needed): types, lint, 17 unit tests (the A/B statistics), build
+# Frontend (no local Node needed): types, lint, 20 unit tests (A/B statistics, play-money notice), build
 docker run --rm -v "$PWD/frontend:/app" -w /app node:22-alpine sh -c "npm install && npx tsc --noEmit && npx vp lint src && npx vp test run && npm run build"
 
 # Steam bot: 35 unit tests (needs Rust and protoc, see deadlock-bot/README.md)
