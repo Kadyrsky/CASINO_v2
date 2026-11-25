@@ -159,6 +159,11 @@ Things learned from live broadcasts:
   subclass in `m_nSubclassID` (the game's hash of the subclass's name, as deadlock-api's item ids: `gun_powerup_pickup`
   is 201785745), and shows it; taking it hides it again (`m_fEffects` 32) with its last kind kept. So a waiting
   power-up's kind is that of the pickup on its spot. Every one followed on five live broadcasts had its kind.
+* Shrines (`CCitadel_Destroyable_Building`, kind `shrine`): two per team, on their pedestals in the base at z 980
+  (Hidden King) and 1000 (Archmother), 5000 health each, no `m_iLane`. A destroyed shrine's entity is removed. The
+  patron (`CNPC_Boss_Tier3`) keeps one entity through both phases (`m_ePhase` 0, then 1). The
+  `CNPC_Boss_Tier3Core` seen over a dead patron, 350 units up, had no health or team (frames list objectives only
+  while they have health).
 
 `deadlock-bot live <broadcast_url>` prints the frames as JSON lines, which is the quickest way to check a patch didn't
 break anything.

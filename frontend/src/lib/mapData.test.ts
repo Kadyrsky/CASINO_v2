@@ -9,7 +9,7 @@ import { gunzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vite-plus/test';
 import { BAND, InteriorIndex, OPEN_RADIUS, SLICE, SLICE_STRIDE } from './mapInteriors';
 import { decodeModel, groundHeight, inArena, mapHeight, type MapModel } from './mapModel';
-import { decodeObjects, heightOf, modelFor, nearestSpawn, type MapObjects } from './mapObjects';
+import { decodeObjects, grownBy, heightOf, modelFor, nearestSpawn, type MapObjects } from './mapObjects';
 import { POWERUP_LOOKS } from './powerupIcons';
 
 const here = (path: string) => new URL(`../../${path}`, import.meta.url);
@@ -228,10 +228,34 @@ describe('the models standing on the map', () => {
     for (const kind of [...Object.keys(POWERUP_LOOKS), '0']) expect(skins.has(kind), kind).toBe(true);
   });
 
+  it("has each team's shrine and patron, the Hidden King and the Archmother, at the game's size", () => {
+    for (const team of [0, 1] as const) {
+      const shrine = modelFor(o(), 'shrine', team)!;
+      const patron = modelFor(o(), 'patron', team)!;
+      expect(shrine.model.name).toBe(`shrine_${team}`);
+      expect(patron.model.name).toBe(`patron_${team}`);
+      for (const { model, colours } of [shrine, patron]) {
+        expect(model.indices.length / 3, model.name).toBeGreaterThan(1000);
+        expect(colours, model.name).toBe(model.skins.get('0')); // the team's own model: one skin
+      }
+      // Shrines on their pedestals at three quarters of their model's size, 350 to 450 world units high without the
+      // light the Archmother's book shines; the patrons tower over the base, about 1,800 (her model at 0.8).
+      expect(shrine.model.scale).toBeCloseTo(0.75, 5);
+      expect(shrine.model.height).toBeGreaterThan(350);
+      expect(shrine.model.height).toBeLessThan(450);
+      expect(patron.model.height).toBeGreaterThan(1500);
+      expect(patron.model.height).toBeLessThan(2100);
+      // Drawn bigger than they are with the whole map in view, the shrines grow as the guardians do; the patrons don't.
+      expect(grownBy(shrine.model, 2.5)).toBe(2.5);
+      expect(grownBy(patron.model, 2.5)).toBe(1);
+    }
+    expect(modelFor(o(), 'patron', 1)!.model.scale).toBeCloseTo(0.8, 5);
+  });
+
   it("places every objective where the game does, so frames without heights stand them right", () => {
     const counts = new Map<string, number>();
     for (const s of o().spawns) counts.set(s.kind, (counts.get(s.kind) ?? 0) + 1);
-    expect(Object.fromEntries(counts)).toEqual({ guardian: 6, walker: 6, base_guardian: 12, patron: 2, powerup: 2 });
+    expect(Object.fromEntries(counts)).toEqual({ guardian: 6, walker: 6, base_guardian: 12, shrine: 4, patron: 2, powerup: 2 });
     for (const ob of objectives.filter((ob) => ob.kind !== 'midboss')) {
       const spawn = nearestSpawn(o(), ob.kind as 'guardian', ob.x, ob.y);
       expect(spawn, `${ob.kind} at ${ob.x}, ${ob.y}`).not.toBeNull();

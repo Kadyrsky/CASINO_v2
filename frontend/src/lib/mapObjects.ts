@@ -1,17 +1,18 @@
 /**
  * The models the 3D view stands on the map: the lane guardians, the walkers, the base guardians (a different statue
- * for each team) and the bridge power-ups, from the game's own models, made by scripts/map_objects.py (see its
- * docstring for how and for the file format), served from /maps/objects.bin.gz. With them, where the map places each
- * one and which way it faces, so frames without heights (older bots) still stand them right.
+ * for each team), the shrines and the patrons (the Hidden King and the Archmother: each team's own) and the bridge
+ * power-ups, from the game's own models, made by scripts/map_objects.py (see its docstring for how and for the file
+ * format), served from /maps/objects.bin.gz. With them, where the map places each one and which way it faces, so
+ * frames without heights (older bots) still stand them right.
  */
 import type { LiveFrame, ObjectiveKind } from '../api/types';
 
 export const OBJECTS_URL = '/maps/objects.bin.gz';
 
 /** What a model stands for: an objective kind the bot reports, or a bridge power-up. */
-export type ObjectKind = Extract<ObjectiveKind, 'guardian' | 'walker' | 'base_guardian'> | 'powerup';
-/** What the map places: the models' kinds, and the patrons (no model, but their spot's height). */
-export type SpawnKind = ObjectKind | 'patron';
+export type ObjectKind = Extract<ObjectiveKind, 'guardian' | 'walker' | 'base_guardian' | 'shrine' | 'patron'> | 'powerup';
+/** What the map places: the models' kinds. */
+export type SpawnKind = ObjectKind;
 
 export interface ObjectModel {
   name: string;
@@ -23,8 +24,9 @@ export interface ObjectModel {
   indices: Uint16Array;
   /**
    * Its skins by name ('0' the Hidden King's, '1' the Archmother's; one skin, '0', when the teams' look the same or
-   * the model is a team's own; the power-up's crystal also has one for each kind, 'gun' and so on, in its colour): per
-   * triangle its sRGB colour and how much it glows (0 lit like the map, 255 its own colour), four bytes.
+   * the model is a team's own, like base_guardian_1 or patron_0; the power-up's crystal also has one for each kind,
+   * 'gun' and so on, in its colour): per triangle its sRGB colour and how much it glows (0 lit like the map, 255 its
+   * own colour), four bytes.
    */
   skins: Map<string, Uint8Array>;
   /** How far its top is above the spot it stands on, in world units. */
@@ -49,7 +51,18 @@ export interface MapObjects {
 }
 
 const MAGIC = 0x4a424f4e; // "NOBJ" read as little-endian u32
-const KINDS: readonly string[] = ['guardian', 'walker', 'base_guardian', 'patron', 'powerup'];
+const KINDS: readonly string[] = ['guardian', 'walker', 'base_guardian', 'shrine', 'patron', 'powerup'];
+/** Kinds that are a different model for each team (named for it: base_guardian_0, shrine_1, patron_0 and so on). */
+const TEAM_MODELS: ReadonlySet<ObjectKind> = new Set(['base_guardian', 'shrine', 'patron']);
+/** The objectives the map stands a model for. */
+const MODELLED: ReadonlySet<string> = new Set<ObjectKind>(['guardian', 'walker', 'base_guardian', 'shrine', 'patron']);
+const isModelled = (kind: ObjectiveKind): kind is Extract<ObjectiveKind, ObjectKind> => MODELLED.has(kind);
+
+/**
+ * The tallest (world units) a model grows to when the 3D view draws the models bigger than they are, so they read
+ * among the buildings with the whole map in view: the patrons, as tall as the buildings round them, stay their size.
+ */
+export const GROWN_HEIGHT = 1250;
 
 /** Decodes the (already unzipped) objects file. */
 export function decodeObjects(buf: ArrayBuffer): MapObjects {
@@ -127,11 +140,20 @@ export function modelFor(
   team: 0 | 1 | null,
   skin?: string | null,
 ): { model: ObjectModel; colours: Uint8Array } | null {
-  // Base guardians are a different model for each team; the others have a skin for each (or one for both).
-  const model = objects.models.get(kind === 'base_guardian' ? `base_guardian_${team ?? 0}` : kind);
+  // Base guardians, shrines and patrons are a different model for each team; the others have a skin for each (or one
+  // for both).
+  const model = objects.models.get(TEAM_MODELS.has(kind) ? `${kind}_${team ?? 0}` : kind);
   if (!model) return null;
   const colours = (skin ? model.skins.get(skin) : undefined) ?? model.skins.get(String(team ?? 0)) ?? model.skins.values().next().value;
   return colours ? { model, colours } : null;
+}
+
+/**
+ * How many times its size a model is drawn when the models are drawn `grow` times theirs: as many, but growing no
+ * taller than GROWN_HEIGHT (nor shrinking for it).
+ */
+export function grownBy(model: ObjectModel, grow: number): number {
+  return Math.min(grow, Math.max(1, GROWN_HEIGHT / (model.height || 1)));
 }
 
 /** The map's spawn of a kind nearest to world point (x, y), if one is within `reach` world units. */
@@ -177,8 +199,9 @@ export interface Placement {
 }
 
 /**
- * What stands on the map in a frame: each standing guardian, walker and base guardian, and each power-up waiting to be
- * picked up. They face the way the map places them, and stand at their spawn's height when the frame has none.
+ * What stands on the map in a frame: each standing guardian, walker, base guardian, shrine and patron, and each
+ * power-up waiting to be picked up (what the frame no longer has, destroyed, is gone). They face the way the map places
+ * them, and stand at their spawn's height when the frame has none.
  */
 export function placements(objects: MapObjects, frame: LiveFrame | undefined): Placement[] {
   const out: Placement[] = [];
@@ -189,7 +212,7 @@ export function placements(objects: MapObjects, frame: LiveFrame | undefined): P
     if (look && height != null) out.push({ key, kind, ...look, x, y, z: height, yaw: spawn?.yaw ?? 0 });
   };
   for (const o of frame?.objectives ?? []) {
-    if (o.kind === 'guardian' || o.kind === 'walker' || o.kind === 'base_guardian') place(objectiveKey(o.id), o.kind, o.team, o.x, o.y, o.z);
+    if (isModelled(o.kind)) place(objectiveKey(o.id), o.kind, o.team, o.x, o.y, o.z);
   }
   // The power-up's crystal in its kind's colour, as the game tints it (untinted when the kind isn't known).
   for (const pw of frame?.powerups ?? []) place(powerupKey(pw.x, pw.y), 'powerup', null, pw.x, pw.y, pw.z, pw.kind);

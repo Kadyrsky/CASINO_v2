@@ -67,10 +67,12 @@ test('in the real map, heroes in tunnels and halls open theirs, in the High qual
   expect(high.far).toBeLessThan(0.01);
 });
 
-test('the guardians, walkers and base guardians of both teams and the crystal of every power-up kind draw', async ({ page }) => {
+test('the guardians, walkers, base guardians, shrines and patrons of both teams and the crystal of every power-up kind draw', async ({ page }) => {
   const r = await page.evaluate(() => (window as unknown as Page).harness.objects());
   expect(r.error).toBe(0);
-  for (const cover of [...r.walker, ...r.guardian, ...r.baseGuardian, ...r.powerup]) expect(cover).toBeGreaterThan(0.001);
+  for (const cover of [...r.walker, ...r.guardian, ...r.baseGuardian, ...r.shrine, ...r.patron, ...r.powerup]) expect(cover).toBeGreaterThan(0.001);
+  // The patrons tower over everything else on the map.
+  for (const patron of r.patron) expect(patron).toBeGreaterThan(Math.max(...r.walker, ...r.shrine));
 });
 
 test("the 2.5D view's terrain traces the minimap's buildings and raises them", async ({ page }) => {

@@ -1,32 +1,39 @@
 """Builds the models the realtime map's 3D view stands on the map: the lane guardians, the walkers, the base
-guardians and the bridge power-ups, from the game's own models, simplified and coloured from their textures in each
-team's colours.
+guardians, the shrines, the patrons (the Hidden King and the Archmother) and the bridge power-ups, from the game's own
+models, simplified and coloured from their textures in each team's colours.
 
     python scripts/map_objects.py            (from frontend/; Python 3.14+, numpy and Pillow, like map_model.py)
     python scripts/map_objects.py --game "D:/SteamLibrary/steamapps/common/Deadlock"
 
 Reads the models from a local Deadlock install (found through Steam, or --game) and writes public/maps/objects.bin.gz,
-and the bridge power-ups' kinds (names, colours and minimap icons) to src/lib/powerupIcons.ts. Run it again after a
-patch that changes them. Nothing is downloaded. The models, icons and colours are Valve's, like the map.
+the bridge power-ups' kinds (names, colours and minimap icons) to src/lib/powerupIcons.ts and the shrines' icon to
+public/icons/objectives/shrine.webp. Run it again after a patch that changes them. Nothing is downloaded. The models,
+icons and colours are Valve's, like the map.
 
 How it works:
 1. scripts/npc_units.vdata names each objective's model, its scale in the game and the material groups (skins) the
    game shows for each team: the guardian has "Amber" and "Sapphire"; the walker has none, so the Archmother's takes
    its "friendly" skin (a blue glow, the Hidden King's the default orange one); the base guardians are a different
-   model per team. The bridge power-up is the crystal its particle effect draws, at the size and height it draws it.
+   model per team. The shrines and patrons are a different model per team too, as the map's entities place them: each
+   team's two shrines (destroyable_building) name their model and scale; each team's patron (npc_boss_tier3) names its
+   unit, whose model stands at its first phase's scale. The bridge power-up is the crystal its particle effect draws,
+   at the size and height it draws it.
 2. A model's meshes: the draw calls of its first level of detail, with vertex and index buffers coded with
    meshoptimizer (and sometimes zstd) in their own blocks (MVTX, MIDX), or in the older combined block (MBUF). The
-   vertices are in the model's rest pose, which is how they stand in the game's lanes.
+   vertices are in the model's rest pose, which is how they stand in the game's lanes and bases.
 3. Each triangle is coloured from its material's colour texture where its middle lies, times the material's tint;
-   self-illuminated parts (eyes, flames, candles) glow by their mask, tint and strength. Then the mesh is simplified by
-   vertex clustering, as the map is, each merged triangle taking the area-weighted colour of those it replaces.
-4. Where each stands and which way it faces: the map's entities (guardian spawns, walkers, base guardians, patrons
-   and the power-up spawners). The 3D view matches the frames' objectives and power-ups to these by position, for
-   their facing and, in frames from bots older than heights, their height.
+   self-illuminated parts (eyes, flames, candles) glow by their mask, tint and strength. What the game draws as light
+   rather than as a surface is left out (see see_through). Then the mesh is simplified by vertex clustering, as the
+   map is, each merged triangle taking the area-weighted colour of those it replaces.
+4. Where each stands and which way it faces: the map's entities (guardian spawns, walkers, base guardians, shrines,
+   patrons and the power-up spawners). The 3D view matches the frames' objectives and power-ups to these by position,
+   for their facing and, in frames from bots older than heights, their height.
 5. The bridge power-ups' kinds: the ones scripts/misc.vdata's spawner picks from (gun, survival, casting, movement),
    each with its colour (the game tints its crystal and icons with it), what it gives, its English name (from the
    game's localization) and its minimap icon (panorama/images/minimap, SVG). The crystal gets a skin in each kind's
    colour, and src/lib/powerupIcons.ts the rest, for the map's markers.
+6. The shrines' icon for the map's markers: the game's picture of the shrine (panorama/images/npcs, from when shrines
+   were "shield generators"), its glowing top cut out square, as a 64 px WebP like the other objectives' icons.
 
 The file (little-endian, gzipped): magic "NOBJ", version 1 (u32), model count (u32); per model: name (u8 length,
 ASCII), scale (f32: world units per model unit), vertex and triangle counts (u32), bounds (f32 × 3 min, × 3 max,
@@ -34,9 +41,10 @@ model units, from the spot it stands on: the power-up's floats above it), skin c
 quantized over the bounds (x forward, y left, z up, as in the game); the triangles as u16 vertex indices; per skin
 its name (u8 length, ASCII), the triangles' sRGB colours (3 × u8) and how much each glows (u8, 0 lit like the map to
 255 its own colour). Skins are named for teams ('0', '1'; one skin when the teams' look the same) and, the power-up's,
-for its kinds ('gun' and so on, besides its untinted '0'). Then the spawn count (u32) and per spawn: kind (u8 length,
-ASCII: guardian, walker, base_guardian, patron or powerup), team (u8: 0 the Hidden King's, 1 the Archmother's, 255
-none), x, y, z and yaw (f32: world units and degrees).
+for its kinds ('gun' and so on, besides its untinted '0'). A team's own model (base_guardian_0, shrine_1, patron_0 and
+so on) has one skin, '0'. Then the spawn count (u32) and per spawn: kind (u8 length, ASCII: guardian, walker,
+base_guardian, shrine, patron or powerup), team (u8: 0 the Hidden King's, 1 the Archmother's, 255 none), x, y, z and
+yaw (f32: world units and degrees).
 """
 import argparse
 import gzip
@@ -54,6 +62,7 @@ from map_model import Vpk, blocks, find_game, kv3, lz4_into, normals, unzstd
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / 'public' / 'maps' / 'objects.bin.gz'
 ICONS_OUT = ROOT / 'src' / 'lib' / 'powerupIcons.ts'
+SHRINE_ICON_OUT = ROOT / 'public' / 'icons' / 'objectives' / 'shrine.webp'
 
 # Each bridge power-up kind's minimap icon (panorama/images/minimap/powerup_<icon>.svg): the vdata names only its ping
 # icon (hud/icons/powerup_gun.svg and so on), a bigger picture without the minimap's ring.
@@ -69,8 +78,15 @@ LEAST_LUMINANCE = 0.2
 
 # The bridge power-up has no model of its own: this particle effect draws one, with its own material.
 POWERUP_PARTICLE = 'particles/environment/powerup_spawner_ambient_breakable_model.vpcf'
-# Triangles each model keeps. The 3D view draws all of them at once: 6 guardians, 6 walkers, 12 base guardians.
-TARGET = {'guardian': 6000, 'walker': 6000, 'base_guardian_0': 4000, 'base_guardian_1': 4000, 'powerup': 400}
+# Triangles each model keeps. The 3D view draws all of them at once: 6 guardians, 6 walkers, 12 base guardians,
+# 4 shrines and the 2 patrons (as tall as the buildings round them, so they keep more).
+TARGET = {'guardian': 6000, 'walker': 6000, 'base_guardian_0': 4000, 'base_guardian_1': 4000, 'shrine_0': 4000,
+          'shrine_1': 4000, 'patron_0': 8000, 'patron_1': 8000, 'powerup': 400}
+# The shrines' picture (the game's unit icon from when they were "shield generators") and the part of it the icon
+# shows: its glowing top (left, top, right, bottom as shares of the picture).
+SHRINE_PICTURE = 'panorama/images/npcs/shield_generator_psd.vtex'
+SHRINE_CROP = (0.26, 0.0, 0.89, 0.63)
+ICON_SIZE = 64  # px, as scripts/wiki_icons.py makes the other objectives' icons
 TEXTURE_SIZE = 512  # colour textures are read at the largest mip no wider than this
 MASK_SIZE = 64  # and self-illumination masks at this
 # The power-up's particle effect makes its crystal self-illuminated (its colour, which the game sets for each kind of
@@ -429,6 +445,12 @@ class Model:
 
 def texture(pak: Vpk, path: str, srgb: bool = True, largest: int = TEXTURE_SIZE) -> np.ndarray:
     """A texture's largest mip no wider than `largest` as RGB floats (rows, columns, 3), linear if `srgb`."""
+    rgb = np.asarray(picture(pak, path, largest).convert('RGB'), np.float64) / 255
+    return rgb ** 2.2 if srgb else rgb
+
+
+def picture(pak: Vpk, path: str, largest: int = TEXTURE_SIZE) -> Image.Image:
+    """A texture's largest mip no wider than `largest`, as an image (its own mode: RGBA, RGB or L)."""
     data = pak.read(path + '_c')
     _size, _hv, _v, offset, count = struct.unpack_from('<IHHII', data, 0)
     p = 8 + offset
@@ -472,11 +494,17 @@ def texture(pak: Vpk, path: str, srgb: bool = True, largest: int = TEXTURE_SIZE)
     w, h = max(width >> want, 1), max(height >> want, 1)
     if block:
         padded = ((w + 3) // 4 * 4, (h + 3) // 4 * 4)
-        img = Image.frombuffer(bcn[1], padded, raw[:size_of(want) // depth], 'bcn', bcn[2], '').crop((0, 0, w, h))
-    else:
-        img = Image.frombuffer('RGBA', (w, h), raw[:w * h * 4], 'raw', 'BGRA' if fmt == 28 else 'RGBA', 0, 1)
-    rgb = np.asarray(img.convert('RGB'), np.float64) / 255
-    return rgb ** 2.2 if srgb else rgb
+        return Image.frombuffer(bcn[1], padded, raw[:size_of(want) // depth], 'bcn', bcn[2], '').crop((0, 0, w, h))
+    return Image.frombuffer('RGBA', (w, h), raw[:w * h * 4], 'raw', 'BGRA' if fmt == 28 else 'RGBA', 0, 1)
+
+
+def see_through(path: str, flags: dict[str, int]) -> bool:
+    """Whether the game draws a material as light rather than as a surface, so the map leaves it out: occluders (they
+    only hide what is behind them; the game doesn't draw them), additive blends, and shafts of light (the beams from
+    the Hidden King's eyes and over the Archmother's shrine's book, see-through in the game, would be solid blocks
+    here). Translucency alone isn't enough: the Archmother's robes are translucent."""
+    name = path.lower()
+    return 'occluder' in name or 'light_beam' in name or bool(flags.get('F_ADDITIVE_BLEND'))
 
 
 class Look:
@@ -488,7 +516,7 @@ class Look:
     def __init__(self, pak: Vpk, path: str):
         self.colour = self.mask = None
         self.tint, self.glow_tint, self.glow, self.glow_albedo = np.ones(3), np.zeros(3), 0.0, False
-        self.hidden = 'occluder' in path.lower()  # occluders only hide what is behind them; the game doesn't draw them
+        self.hidden = see_through(path, {})
         try:
             m = kv3(blocks(pak.read(path + '_c'))['DATA'])
         except (KeyError, ValueError, struct.error, IndexError) as e:
@@ -498,6 +526,7 @@ class Look:
         vec = {p['m_name']: np.asarray(p['m_value'], float)[:3] for p in m.get('m_vectorParams', [])}
         num = {p['m_name']: float(p['m_flValue']) for p in m.get('m_floatParams', [])}
         ints = {p['m_name']: int(p['m_nValue']) for p in m.get('m_intParams', [])}
+        self.hidden = see_through(path, ints)
         self.tint = next((vec[t] for t in self.TINTS if t in vec), np.ones(3))
         name = next((tex[t] for t in self.COLOURS if tex.get(t, '') + '_c' in pak.entries), None)
         if name:
@@ -610,8 +639,9 @@ def simplified(P: np.ndarray, T: np.ndarray, colours: list[np.ndarray], target: 
 
 # ---------------------------------------------------------------- the models and where they stand
 
-def objective_models(pak: Vpk) -> list[dict]:
-    """Each model to write: its name, file, scale, lift and skins (name -> material group)."""
+def objective_models(pak: Vpk, entities: list[dict]) -> list[dict]:
+    """Each model to write: its name, file, scale, lift and skins (name -> material group). `entities`: the map's
+    (see map_entities), which place the shrines and patrons."""
     npc = kv3(blocks(pak.read('scripts/npc_units.vdata_c'))['DATA'])
 
     def unit(key: str) -> dict:
@@ -625,6 +655,7 @@ def objective_models(pak: Vpk) -> list[dict]:
         out.append({'name': name, **u, 'skins': {'0': u['team_groups'][0], '1': u['team_groups'][1]}})
     for team, key in (('0', 'npc_barrack_boss_amber'), ('1', 'npc_barrack_boss_sapphire')):
         out.append({'name': f'base_guardian_{team}', **unit(key), 'skins': {'0': None}})
+    out += team_models(npc, entities)
     # The power-up: its particle effect's model, material, size (the particles' radius) and height above its spawner.
     fx = kv3(blocks(pak.read(POWERUP_PARTICLE + '_c'))['DATA'])
     renderer = next(r for r in fx['m_Renderers'] if r.get('_class') == 'C_OP_RenderModels')
@@ -637,6 +668,29 @@ def objective_models(pak: Vpk) -> list[dict]:
     out.append({'name': 'powerup', 'path': renderer['m_ModelList'][0]['m_model'], 'scale': radius, 'lift': lift,
                 'material': renderer.get('m_hOverrideMaterial') or None, 'skins': {'0': None},
                 'glow': POWERUP_GLOW if glows else 0.0})
+    return out
+
+
+def team_models(npc: dict, entities: list[dict]) -> list[dict]:
+    """Each team's shrine and patron model (shrine_0, shrine_1, patron_0, patron_1), as the map places them: a shrine's
+    entity names its model and scale; a patron's names its unit (the Archmother's is "alt_npc_boss_tier3"), whose model
+    stands at its first phase's scale (the Archmother at 0.8). One skin each: the team's own model."""
+    out = []
+    for kind in ('shrine', 'patron'):
+        for team in (0, 1):
+            placed = [v for v in entities if spawn_kind(v) == kind and TEAMS.get(str(v.get('teamnumber'))) == team]
+            if not placed:
+                raise ValueError(f'the map places no {kind} of team {team}')
+            v = placed[0]
+            scale = float(np.asarray(v.get('scales', (1.0, 1.0, 1.0)), float)[0])
+            if kind == 'shrine':
+                building = npc.get('destroyable_building', {})
+                path = v.get('model') or building[('m_sAmberModelName', 'm_sSapphModelName')[team]]
+            else:
+                boss = npc[v.get('subclass_name') or 'npc_boss_tier3']
+                path, scale = boss['m_sModelName'], scale * float(boss.get('m_flPhase1BossScale', 1.0))
+            out.append({'name': f'{kind}_{team}', 'path': path, 'scale': scale, 'lift': 0.0, 'material': None,
+                        'skins': {'0': None}})
     return out
 
 
@@ -725,24 +779,53 @@ def team_group(model: Model, group: str | None, team: str) -> str | None:
     return 'friendly' if team == '1' and 'friendly' in model.groups else None
 
 
-def spawns(game: Vpk, map_name: str) -> list[tuple[str, int, float, float, float, float]]:
-    """(kind, team, x, y, z, yaw) of every guardian, walker, base guardian, patron and bridge power-up the map places
-    (patrons have no model here: their spawns give frames without heights theirs)."""
+# The map's entities that place one of the models, by class.
+SPAWN_KINDS = {'npc_boss_tier2': 'walker', 'npc_barrack_boss': 'base_guardian', 'destroyable_building': 'shrine',
+               'npc_boss_tier3': 'patron', 'citadel_item_powerup_spawner': 'powerup'}
+
+
+def map_entities(game: Vpk, map_name: str) -> list[dict]:
+    """The key values of every entity the map places."""
     out = []
     for lump in sorted(k for k in game.entries if k.startswith(f'maps/{map_name}/entities/') and k.endswith('.vents_c')):
         for e in kv3(blocks(game.read(lump))['DATA']).get('m_entityKeyValues', []):
-            v = (e.get('keyValues3Data') or {}).get('values') or {}
-            c = v.get('classname')
-            kind = {'npc_boss_tier2': 'walker', 'npc_barrack_boss': 'base_guardian', 'npc_boss_tier3': 'patron',
-                    'citadel_item_powerup_spawner': 'powerup'}.get(c)
-            if c == 'info_super_trooper_spawn' and v.get('BossName') and not v.get('ReinforcementsOnly'):
-                kind = 'guardian'  # a lane's guardian spawns here; the other super-trooper spawns are reinforcements
-            if not kind:
-                continue
-            x, y, z = (float(a) for a in v['origin'])
-            yaw = float(v.get('angles', (0, 0, 0))[1])
-            out.append((kind, TEAMS.get(str(v.get('teamnumber')), 255), x, y, z, yaw))
+            out.append((e.get('keyValues3Data') or {}).get('values') or {})
+    return out
+
+
+def spawn_kind(v: dict) -> str | None:
+    """What a map entity (its key values) places: guardian, walker, base_guardian, shrine, patron, powerup or None."""
+    if v.get('classname') == 'info_super_trooper_spawn':
+        # A lane's guardian spawns here; the other super-trooper spawns are reinforcements.
+        return 'guardian' if v.get('BossName') and not v.get('ReinforcementsOnly') else None
+    return SPAWN_KINDS.get(v.get('classname'))
+
+
+def spawns(entities: list[dict]) -> list[tuple[str, int, float, float, float, float]]:
+    """(kind, team, x, y, z, yaw) of every guardian, walker, base guardian, shrine, patron and bridge power-up the map
+    places, from its entities (see map_entities)."""
+    out = []
+    for v in entities:
+        kind = spawn_kind(v)
+        if not kind:
+            continue
+        x, y, z = (float(a) for a in v['origin'])
+        yaw = float(v.get('angles', (0, 0, 0))[1])
+        out.append((kind, TEAMS.get(str(v.get('teamnumber')), 255), x, y, z, yaw))
     return sorted(out)
+
+
+def write_shrine_icon(pak: Vpk):
+    """public/icons/objectives/shrine.webp: the glowing top of the game's picture of a shrine, a square ICON_SIZE wide
+    (as scripts/wiki_icons.py makes the other objectives' icons), for the map's markers."""
+    im = picture(pak, SHRINE_PICTURE, largest=1024).convert('RGBA')
+    left, top, right, bottom = SHRINE_CROP
+    im = im.crop((round(left * im.width), round(top * im.height), round(right * im.width), round(bottom * im.height)))
+    im.thumbnail((ICON_SIZE, ICON_SIZE), Image.LANCZOS)
+    square = Image.new('RGBA', (ICON_SIZE, ICON_SIZE))
+    square.alpha_composite(im, ((ICON_SIZE - im.width) // 2, (ICON_SIZE - im.height) // 2))
+    SHRINE_ICON_OUT.parent.mkdir(parents=True, exist_ok=True)
+    square.save(SHRINE_ICON_OUT, 'WEBP', quality=85, method=6)
 
 
 def main():
@@ -766,10 +849,13 @@ def main():
 
     kinds = powerup_kinds(pak, citadel)
     write_powerup_icons(kinds)
-    print(f'{time.time() - t0:6.1f}s  power-up kinds {[k["name"] for k in kinds]}; wrote {ICONS_OUT.relative_to(ROOT)}', flush=True)
+    write_shrine_icon(pak)
+    print(f'{time.time() - t0:6.1f}s  power-up kinds {[k["name"] for k in kinds]}; wrote {ICONS_OUT.relative_to(ROOT)} '
+          f'and {SHRINE_ICON_OUT.relative_to(ROOT)}', flush=True)
 
+    entities = map_entities(game, args.map)
     out = bytearray(b'NOBJ')
-    models = objective_models(pak)
+    models = objective_models(pak, entities)
     out += struct.pack('<II', 1, len(models))
     for spec in models:
         model = Model(pak, spec['path'])
@@ -810,12 +896,12 @@ def main():
             out += srgb.tobytes() + np.clip(np.round(glow * 255), 0, 255).astype('u1').tobytes()
         print(f'{time.time() - t0:6.1f}s  {spec["name"]}: {spec["path"]} ({len(model.T):,} triangles) -> '
               f'{len(F):,} triangles, {len(V):,} vertices; skins {list(spec["skins"].values())}', flush=True)
-    places = spawns(game, args.map)
+    places = spawns(entities)
     out += struct.pack('<I', len(places))
     for kind, team, x, y, z, yaw in places:
         label = kind.encode()
         out += struct.pack('<B', len(label)) + label + struct.pack('<B4f', team, x, y, z, yaw)
-    counts = {k: sum(1 for p in places if p[0] == k) for k in ('guardian', 'walker', 'base_guardian', 'patron', 'powerup')}
+    counts = {k: sum(1 for p in places if p[0] == k) for k in ('guardian', 'walker', 'base_guardian', 'shrine', 'patron', 'powerup')}
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_bytes(gzip.compress(bytes(out), 9, mtime=0))
     print(f'{time.time() - t0:6.1f}s  spawns {counts}; wrote {OUT.relative_to(ROOT)}: '

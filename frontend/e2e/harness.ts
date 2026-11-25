@@ -198,14 +198,17 @@ const harness = {
     };
   },
 
-  /** A walker of each team and a power-up crystal of each kind on an empty canvas: how much of it each covers. */
+  /**
+   * Each team's guardian, walker, base guardian, shrine and patron and a power-up crystal of each kind on an empty
+   * canvas: how much of it each covers.
+   */
   async objects() {
     const objects = await loadObjects('/maps/objects.bin.gz');
     const { gl, vp } = surface(300, 300);
     const renderer = ObjectRenderer.create(gl)!;
     const cam: Camera = { x: 500, y: 500, zoom: 6, yaw: 0, tilt: DEFAULT_TILT };
     const matrix = clipMatrix(cam, vp);
-    const cover = (kind: 'walker' | 'guardian' | 'base_guardian' | 'powerup', team: 0 | 1 | null, skin?: string) => {
+    const cover = (kind: 'walker' | 'guardian' | 'base_guardian' | 'shrine' | 'patron' | 'powerup', team: 0 | 1 | null, skin?: string) => {
       const look = modelFor(objects, kind, team, skin);
       if (!look) return -1;
       gl.viewport(0, 0, 300, 300);
@@ -224,6 +227,8 @@ const harness = {
       walker: [cover('walker', 0), cover('walker', 1)],
       guardian: [cover('guardian', 0), cover('guardian', 1)],
       baseGuardian: [cover('base_guardian', 0), cover('base_guardian', 1)],
+      shrine: [cover('shrine', 0), cover('shrine', 1)],
+      patron: [cover('patron', 0), cover('patron', 1)],
       powerup: ['gun', 'survival', 'casting', 'movement'].map((k) => cover('powerup', null, k)),
       error: gl.getError(),
     };

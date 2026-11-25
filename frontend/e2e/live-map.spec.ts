@@ -95,6 +95,9 @@ test('builds: every hero has its own four abilities and different items the shop
 test('2D: every hero, the objectives, and both bridge power-ups with their kind and what it gives', async ({ page }) => {
   await openMatch(page, '2D');
   for (const player of PLAYERS) await expect(page.locator('svg title', { hasText: ` · ${player}` }).first()).toBeAttached();
+  // Both teams' shrines and patrons, with their health.
+  await expect(page.locator('svg title', { hasText: /^shrine · \d+%$/ })).toHaveCount(4);
+  await expect(page.locator('svg title', { hasText: /^patron · \d+%$/ })).toHaveCount(2);
   const powerups = page.locator('svg title', { hasText: 'power-up · ' });
   await expect(powerups).toHaveCount(2);
   for (const title of await powerups.allTextContents()) expect(title).toMatch(/^(Gun|Survival|Casting|Movement) power-up · \w/);
