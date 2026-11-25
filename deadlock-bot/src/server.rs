@@ -386,15 +386,19 @@ impl<B: Backend> Server<B> {
         }
     }
 
+    /// A broadcast spectated less than `spectate_ttl` ago, without spectating again (no Steam request, no wait).
+    pub fn spectated(&self, match_id: u64) -> Option<Value> {
+        let spectates = self.spectates.lock().unwrap_or_else(|e| e.into_inner());
+        spectates
+            .get(&match_id)
+            .filter(|(at, _)| at.elapsed() < self.limits.spectate_ttl)
+            .map(|(_, value)| value.clone())
+    }
+
     /// The broadcast of a live match, from the cache or by spectating it (within the spectate wait).
     pub async fn spectate(&self, match_id: u64) -> Result<Value, Spectate> {
-        {
-            let spectates = self.spectates.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some((at, value)) = spectates.get(&match_id)
-                && at.elapsed() < self.limits.spectate_ttl
-            {
-                return Ok(value.clone());
-            }
+        if let Some(value) = self.spectated(match_id) {
+            return Ok(value);
         }
         self.permit("spectate", self.limits.spectate).map_err(Spectate::TooSoon)?;
         let value = self.backend.spectate(match_id).await.map_err(Spectate::Failed)?;
@@ -843,6 +847,18 @@ mod tests {
         assert_eq!(s.backend.spectate_calls.load(Ordering::SeqCst), 1);
         let (status, _, _) = get(&s, "/v1/matches/10/live/url", None).await;
         assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_cached_broadcast_is_read_without_spending_the_wait() {
+        let (s, dir) = server(strict(), None);
+        assert!(s.spectated(9).is_none());
+        s.spectate(9).await.unwrap();
+        assert_eq!(s.spectated(9).unwrap()["broadcast_url"], "http://example.test/tv/1");
+        assert!(s.spectated(10).is_none());
+        assert_eq!(s.backend.spectate_calls.load(Ordering::SeqCst), 1);
+        assert!(matches!(s.spectate(10).await, Err(Spectate::TooSoon(_))));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

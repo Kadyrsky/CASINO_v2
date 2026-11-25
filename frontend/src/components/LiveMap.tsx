@@ -711,7 +711,10 @@ export function LiveMap(props: { externalId: string; roster?: LivePlayer[] }) {
                     <div class="flex flex-col items-center gap-2 px-6">
                       <Spinner class="size-6 text-gold-400" />
                       <p class="text-sm text-ink-200">Connecting to the match broadcast…</p>
-                      <p class="text-xs text-ink-400">The first frames can take up to a minute while the bot joins the broadcast.</p>
+                      <p class="text-xs text-ink-400">
+                        This can take a few minutes: the bot joins match broadcasts one at a time, and matches people
+                        are watching go first.
+                      </p>
                     </div>
                   </div>
                 </Show>

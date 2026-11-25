@@ -3,7 +3,9 @@
 //!
 //! Which matches: the watcher's tracked matches first (their live state also drives the odds), then any match a
 //! viewer has open on the site, up to `max_feeds`. Broadcast URLs come from deadlock-api's public list
-//! (`/v1/matches/live/urls`, free) and, when a match isn't there, from spectating it with the bot (one per 5 min).
+//! (`/v1/matches/live/urls`, free) and, when a match isn't there, from spectating it with the bot: one every
+//! [`crate::guard::SPECTATE_GAP`] (3 min), and a match someone has open is spectated next, before tracked matches
+//! nobody is watching.
 //!
 //! Redis, shared with the watcher and the core:
 //! - reads `watcher:tracked` (JSON array of match ids) and the sorted set `live:wanted` (member = match id,
@@ -116,6 +118,8 @@ async fn run_once(cfg: &Config, server: &Arc<Server<SteamBackend>>, http: &reqwe
     // When each match's spectated feeds started giving nothing (see `after_stop`).
     let mut empty_since: HashMap<u64, Instant> = HashMap::new();
     let mut urls = PublicUrls::default();
+    // The spectate wait isn't over until then: no need to ask before.
+    let mut spectate_after: Option<Instant> = None;
 
     loop {
         while let Ok((id, result)) = done_rx.try_recv() {
@@ -144,7 +148,7 @@ async fn run_once(cfg: &Config, server: &Arc<Server<SteamBackend>>, http: &reqwe
         not_before.retain(|_, t| *t > Instant::now());
         spectate_instead.retain(|id| not_before.contains_key(id) || running.contains_key(id) || urls.by_match.contains_key(id));
 
-        let wanted = wanted(&mut con, cfg.max_feeds).await?;
+        let (wanted, viewed) = wanted(&mut con, cfg.max_feeds).await?;
         // Kept while the match is wanted, so it survives the short waits between tries.
         empty_since.retain(|id, _| wanted.contains(id) || not_before.contains_key(id) || running.contains_key(id));
         for (id, r) in &running {
@@ -152,26 +156,51 @@ async fn run_once(cfg: &Config, server: &Arc<Server<SteamBackend>>, http: &reqwe
                 r.stop.store(true, Ordering::Relaxed);
             }
         }
+        // A match whose link costs nothing starts now: deadlock-api's public list, or a link the bot spectated in the
+        // last hour. The others queue for the bot's next spectate, where a match someone has open goes first.
+        let mut starts: Vec<(u64, String, bool)> = Vec::new();
+        let mut to_spectate: Vec<u64> = Vec::new();
         for &id in &wanted {
-            if running.len() >= cfg.max_feeds {
+            if running.len() + starts.len() >= cfg.max_feeds {
                 break;
             }
             if running.contains_key(&id) || not_before.contains_key(&id) {
                 continue;
             }
             let allow_public = !spectate_instead.contains(&id);
-            match broadcast_url(id, &mut urls, http, &cfg.deadlock_api, server, allow_public).await {
-                Ok((url, from_public_list)) => {
-                    log::info!("following match {id}: {url}");
-                    let mut feed = start(id, url, cfg.every_ticks, frames_tx.clone(), done_tx.clone());
-                    feed.from_public_list = from_public_list;
-                    running.insert(id, feed);
-                }
-                Err(why) => {
-                    log::debug!("no broadcast for match {id} yet: {why}");
+            match free_url(id, &mut urls, http, &cfg.deadlock_api, server, allow_public).await {
+                Some((url, from_public_list)) => starts.push((id, url, from_public_list)),
+                None => to_spectate.push(id),
+            }
+        }
+        if running.len() + starts.len() < cfg.max_feeds
+            && spectate_after.is_none_or(|t| Instant::now() >= t)
+            && let Some(&id) = spectate_order(&to_spectate, &viewed).first()
+        {
+            match server.spectate(id).await {
+                Ok(v) => match v["broadcast_url"].as_str() {
+                    Some(url) => {
+                        let why = if viewed.contains(&id) { "someone has it open" } else { "tracked" };
+                        log::info!("spectated match {id} ({why})");
+                        starts.push((id, url.to_owned(), false));
+                    }
+                    None => {
+                        log::debug!("no broadcast for match {id} yet: no broadcast_url");
+                        not_before.insert(id, Instant::now() + AFTER_ERROR);
+                    }
+                },
+                Err(Spectate::TooSoon(wait)) => spectate_after = Some(Instant::now() + Duration::from_secs(wait)),
+                Err(Spectate::Failed(e)) => {
+                    log::debug!("no broadcast for match {id} yet: {e:?}");
                     not_before.insert(id, Instant::now() + AFTER_ERROR);
                 }
             }
+        }
+        for (id, url, from_public_list) in starts {
+            log::info!("following match {id}: {url}");
+            let mut feed = start(id, url, cfg.every_ticks, frames_tx.clone(), done_tx.clone());
+            feed.from_public_list = from_public_list;
+            running.insert(id, feed);
         }
 
         let status = json!({
@@ -190,8 +219,9 @@ async fn run_once(cfg: &Config, server: &Arc<Server<SteamBackend>>, http: &reqwe
     }
 }
 
-/// Tracked matches first, then the ones viewers have open (newest interest first).
-async fn wanted(con: &mut ConnectionManager, max: usize) -> Result<Vec<u64>> {
+/// What to follow, tracked matches first, then the ones viewers have open (newest interest first); and which of them
+/// someone has open, since those get the bot's next spectate.
+async fn wanted(con: &mut ConnectionManager, max: usize) -> Result<(Vec<u64>, HashSet<u64>)> {
     let tracked: Option<String> = redis::cmd("GET").arg("watcher:tracked").query_async(con).await?;
     let mut out: Vec<u64> = tracked
         .and_then(|s| serde_json::from_str::<Vec<Value>>(&s).ok())
@@ -203,6 +233,7 @@ async fn wanted(con: &mut ConnectionManager, max: usize) -> Result<Vec<u64>> {
     redis::cmd("ZREMRANGEBYSCORE").arg("live:wanted").arg("-inf").arg(now).query_async::<()>(con).await?;
     let viewers: Vec<String> = redis::cmd("ZREVRANGEBYSCORE").arg("live:wanted").arg("+inf").arg(now)
         .query_async(con).await?;
+    let viewed: HashSet<u64> = viewers.iter().filter_map(|s| s.parse::<u64>().ok()).collect();
     let mut seen: HashSet<u64> = out.iter().copied().collect();
     for id in viewers.iter().filter_map(|s| s.parse::<u64>().ok()) {
         if seen.insert(id) {
@@ -210,7 +241,15 @@ async fn wanted(con: &mut ConnectionManager, max: usize) -> Result<Vec<u64>> {
         }
     }
     out.truncate(max);
-    Ok(out)
+    Ok((out, viewed))
+}
+
+/// Who gets the bot's next spectate: matches someone has open on the site first, then the others, each in the order
+/// they came (tracked ones in the watcher's order).
+fn spectate_order(candidates: &[u64], viewed: &HashSet<u64>) -> Vec<u64> {
+    let mut order = candidates.to_vec();
+    order.sort_by_key(|id| !viewed.contains(id)); // stable: `false` (viewed) sorts first
+    order
 }
 
 async fn publish(con: &mut ConnectionManager, frame: &Frame) -> Result<()> {
@@ -263,14 +302,16 @@ struct PublicUrls {
     by_match: HashMap<u64, String>,
 }
 
-async fn broadcast_url(
+/// A link that costs no Steam request, and whether it is deadlock-api's public one: that one (unless it proved stale,
+/// `allow_public` false), or else one the bot spectated in the last hour. None: the match needs a spectate.
+async fn free_url(
     id: u64,
     urls: &mut PublicUrls,
     http: &reqwest::Client,
     api: &str,
     server: &Server<SteamBackend>,
     allow_public: bool,
-) -> Result<(String, bool), String> {
+) -> Option<(String, bool)> {
     if urls.fetched.is_none_or(|t| t.elapsed() > Duration::from_secs(30)) {
         urls.fetched = Some(Instant::now());
         match fetch_public_urls(http, api).await {
@@ -279,13 +320,10 @@ async fn broadcast_url(
         }
     }
     if allow_public && let Some(url) = urls.by_match.get(&id) {
-        return Ok((url.clone(), true));
+        return Some((url.clone(), true));
     }
-    match server.spectate(id).await {
-        Ok(v) => v["broadcast_url"].as_str().map(|u| (u.to_owned(), false)).ok_or_else(|| "no broadcast_url".to_owned()),
-        Err(Spectate::TooSoon(wait)) => Err(format!("spectate wait: {wait}s")),
-        Err(Spectate::Failed(e)) => Err(format!("{e:?}")),
-    }
+    let spectated = server.spectated(id)?;
+    spectated["broadcast_url"].as_str().map(|u| (u.to_owned(), false))
 }
 
 async fn fetch_public_urls(http: &reqwest::Client, api: &str) -> Result<HashMap<u64, String>> {
@@ -327,5 +365,17 @@ mod tests {
     #[test]
     fn a_spectated_broadcast_that_keeps_giving_nothing_is_over() {
         assert_eq!(after_stop(0, false, FRESH_LINK_WINDOW), (AFTER_END, false));
+    }
+
+    #[test]
+    fn a_match_someone_has_open_gets_the_next_spectate() {
+        let viewed = HashSet::from([30, 50]);
+        assert_eq!(spectate_order(&[10, 20, 30, 40, 50], &viewed), vec![30, 50, 10, 20, 40]);
+    }
+
+    #[test]
+    fn without_viewers_the_tracked_order_stands() {
+        assert_eq!(spectate_order(&[10, 20, 30], &HashSet::new()), vec![10, 20, 30]);
+        assert!(spectate_order(&[], &HashSet::from([10])).is_empty());
     }
 }
