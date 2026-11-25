@@ -8,6 +8,7 @@ import { wallet } from '../lib/wallet';
 import { hub } from '../lib/ws';
 import { customize, feedbackPanel, tasteTest } from '../lib/panels';
 import { prompts } from '../lib/prompts';
+import { appVersion } from '../lib/version';
 import { CustomizeButton } from './Appearance';
 import { Disclaimer } from './Disclaimer';
 import { FeedbackDock } from './Feedback';
@@ -58,7 +59,11 @@ export default function Layout(props: RouteSectionProps) {
             <span class="grid size-8 place-items-center rounded-lg bg-gradient-to-br from-gold-300 to-gold-600 text-sm font-black text-ink-950 shadow-[0_0_20px_-4px_color-mix(in_oklab,var(--color-gold-500)_70%,transparent)]">
               N
             </span>
-            <span class="dl-type hidden text-lg font-extrabold tracking-tight sm:inline">naebka</span>
+            {/* The name and, under it, the version this build is (lib/version.ts). */}
+            <span class="hidden flex-col sm:flex">
+              <span class="dl-type text-lg font-extrabold leading-tight tracking-tight">naebka</span>
+              <span class="tabular text-[11px] leading-tight text-ink-400">{appVersion}</span>
+            </span>
           </A>
 
           <nav class="no-scrollbar -mx-1 flex flex-1 gap-1 overflow-x-auto px-1">

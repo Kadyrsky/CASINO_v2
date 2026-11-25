@@ -1,6 +1,8 @@
 # CI: tests on every push and pull request.
 # CD: on a push to main (after the tests pass) the core and live images are built here, pushed to GHCR, and the
 # server (deploy/README.md) pulls and restarts them. The server never builds anything.
+# Versions: every push to main is a release with a MAJOR.MINOR.PATCH number worked out from what was merged
+# (docs/versioning.md). The version job finds the number, the images are built with it, the release job tags it.
 #
 # Repository secrets used by the deploy job (Settings → Secrets and variables → Actions):
 #   DEPLOY_HOST          server IP or hostname
@@ -131,10 +133,38 @@ jobs:
       - run: npm audit --omit=dev --audit-level=high
         working-directory: contracts
 
+  # The version (docs/versioning.md). On a push to main: the number this run releases, from the newest vX.Y.Z tag and
+  # the pull requests merged since (their labels, titles and branches). On a pull request: the number merging it would
+  # make, in the run's summary. The script's own tests run every time.
+  version:
+    name: Version (next release number)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+      tag: ${{ steps.next.outputs.tag }}
+      previous_tag: ${{ steps.next.outputs.previous_tag }}
+      baseline_commit: ${{ steps.next.outputs.baseline_commit }}
+      release: ${{ steps.next.outputs.release }}
+    steps:
+      - uses: actions/checkout@v5
+        # Every commit and tag, to see what came after the newest tag; file contents only for this commit.
+        with: { fetch-depth: 0, filter: "blob:none" }
+      - uses: actions/setup-node@v5
+        with: { node-version: "22" }
+      - run: node --test .github/scripts/next-version.test.mjs
+      - id: next
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+        run: node .github/scripts/next-version.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   images:
     name: Build and push images
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    needs: [core, live, frontend, frontend-browser, contracts, security]
+    needs: [version, core, live, frontend, frontend-browser, contracts, security]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -152,23 +182,60 @@ jobs:
           context: .
           file: core/Dockerfile
           # The music is in the repository; skip = use it as it is and never ask deadlock.wiki (which refuses GitHub's
-          # runners with HTTP 403 anyway).
-          build-args: MUSIC=skip
+          # runners with HTTP 403 anyway). NAEBKA_VERSION is the number the site shows under its name.
+          build-args: |
+            MUSIC=skip
+            NAEBKA_VERSION=${{ needs.version.outputs.version }}
           push: true
-          tags: ${{ env.IMAGE_PREFIX }}-core:${{ github.sha }},${{ env.IMAGE_PREFIX }}-core:latest
+          # Tagged with the commit, the version and latest.
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-core:${{ github.sha }}
+            ${{ env.IMAGE_PREFIX }}-core:${{ needs.version.outputs.version }}
+            ${{ env.IMAGE_PREFIX }}-core:latest
           cache-from: type=gha,scope=core
           cache-to: type=gha,scope=core,mode=max
       - uses: docker/build-push-action@v6
         with:
           context: live
           push: true
-          tags: ${{ env.IMAGE_PREFIX }}-live:${{ github.sha }},${{ env.IMAGE_PREFIX }}-live:latest
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-live:${{ github.sha }}
+            ${{ env.IMAGE_PREFIX }}-live:${{ needs.version.outputs.version }}
+            ${{ env.IMAGE_PREFIX }}-live:latest
           cache-from: type=gha,scope=live
           cache-to: type=gha,scope=live,mode=max
 
+  # Tags the commit vX.Y.Z once its images are pushed, and publishes a GitHub release with the pull requests merged
+  # since the previous one. No endless loop of runs: nothing here pushes a commit, this workflow runs for branch pushes
+  # and pull requests but not for tags or releases, and GitHub starts no runs for what GITHUB_TOKEN creates anyway.
+  release:
+    name: Release (version tag)
+    needs: [version, images]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Tag the commit and publish the release
+        if: needs.version.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+          PREVIOUS_TAG: ${{ needs.version.outputs.previous_tag }}
+          BASELINE_COMMIT: ${{ needs.version.outputs.baseline_commit }}
+        run: |
+          # The first release also tags the version main had reached before (docs/versioning.md), so its notes start
+          # there. What exists already is left alone, so re-running a failed job carries on where it stopped.
+          if [ -n "$BASELINE_COMMIT" ] && ! gh api "repos/$GH_REPO/git/ref/tags/$PREVIOUS_TAG" --silent 2>/dev/null; then
+            gh api "repos/$GH_REPO/git/refs" -f ref="refs/tags/$PREVIOUS_TAG" -f sha="$BASELINE_COMMIT" --silent
+          fi
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --generate-notes --notes-start-tag "$PREVIOUS_TAG"
+          fi
+
   deploy:
     name: Deploy to server
-    needs: [images]
+    needs: [images, release]
     runs-on: ubuntu-latest
     environment:
       name: production

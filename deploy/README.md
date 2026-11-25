@@ -1,14 +1,15 @@
 # Production deployment (poker.naebka.win)
 
 ```
-GitHub push to main ──► Actions: tests ──► build images ──► ghcr.io/kadyrsky/casino_v2-{core,live}:<sha>
+GitHub push to main ──► Actions: tests ──► build images ──► ghcr.io/kadyrsky/casino_v2-{core,live}:<sha>, :<version>
+                                                        ├─► tag v<version>, GitHub release (docs/versioning.md)
                                                         └─► SSH to server: server-deploy.sh <sha>
 Server /opt/naebka:  sni-router (443) ─► caddy (80, HTTPS) ──► core:8081 ──► postgres, redis ◄── watcher, odds-engine
 ```
 
 | File | Purpose |
 |---|---|
-| `.github/workflows/ci-cd.yml` | Tests on every push/PR; on `main` also builds, pushes and deploys |
+| `.github/workflows/ci-cd.yml` | Tests on every push/PR; on `main` also numbers the release ([docs/versioning.md](../docs/versioning.md)), builds, pushes, tags and deploys |
 | `deploy/docker-compose.prod.yml` | Production stack (prebuilt images, only Caddy is public, memory limits for 1 GB RAM) |
 | `deploy/Caddyfile` | Reverse proxy + automatic Let's Encrypt certificate for `SITE_DOMAIN` |
 | `deploy/haproxy.cfg` | SNI router on public 443: `poker.naebka.win` → Caddy, anything else → Amnezia VPN |
