@@ -44,6 +44,8 @@ pub struct Limits {
     pub spectate_ttl: Duration,
     /// An old live list is still served for this long when Steam can't be asked.
     pub stale_active: Duration,
+    /// No spectate for this long after Steam says it is rate limiting them.
+    pub rate_limited_pause: Duration,
 }
 
 impl Default for Limits {
@@ -55,6 +57,7 @@ impl Default for Limits {
             not_ready: Duration::from_secs(60),
             spectate_ttl: Duration::from_secs(60 * 60),
             stale_active: Duration::from_secs(10 * 60),
+            rate_limited_pause: guard::SPECTATE_RATE_LIMITED_PAUSE,
         }
     }
 }
@@ -254,6 +257,8 @@ pub struct Server<B> {
     active: Mutex<Option<(Instant, Value)>>,
     results: std::sync::Mutex<Results>,
     spectates: std::sync::Mutex<HashMap<u64, (Instant, Value)>>,
+    /// Set when Steam rate limits a spectate: none is sent before then.
+    spectate_paused_until: std::sync::Mutex<Option<Instant>>,
 }
 
 #[derive(Default)]
@@ -274,6 +279,7 @@ impl<B: Backend> Server<B> {
             active: Mutex::new(None),
             results: std::sync::Mutex::new(Results::default()),
             spectates: std::sync::Mutex::new(HashMap::new()),
+            spectate_paused_until: std::sync::Mutex::new(None),
         }
     }
 
@@ -395,13 +401,35 @@ impl<B: Backend> Server<B> {
             .map(|(_, value)| value.clone())
     }
 
-    /// The broadcast of a live match, from the cache or by spectating it (within the spectate wait).
+    /// Seconds left of the pause a rate-limited spectate started, if one is on.
+    fn spectate_pause_left(&self) -> Option<u64> {
+        let until = (*self.spectate_paused_until.lock().unwrap_or_else(|e| e.into_inner()))?;
+        let left = until.saturating_duration_since(Instant::now());
+        (!left.is_zero()).then(|| left.as_secs().max(1))
+    }
+
+    /// The broadcast of a live match, from the cache or by spectating it (within the spectate wait,
+    /// and not while Steam's rate limiting has paused spectates).
     pub async fn spectate(&self, match_id: u64) -> Result<Value, Spectate> {
         if let Some(value) = self.spectated(match_id) {
             return Ok(value);
         }
+        if let Some(left) = self.spectate_pause_left() {
+            return Err(Spectate::TooSoon(left));
+        }
         self.permit("spectate", self.limits.spectate).map_err(Spectate::TooSoon)?;
-        let value = self.backend.spectate(match_id).await.map_err(Spectate::Failed)?;
+        let value = match self.backend.spectate(match_id).await {
+            Ok(value) => value,
+            Err(e) => {
+                if let CallError::Answer(GcAnswer::RateLimited(message)) = &e {
+                    let pause = self.limits.rate_limited_pause;
+                    *self.spectate_paused_until.lock().unwrap_or_else(|p| p.into_inner()) =
+                        Some(Instant::now() + pause);
+                    log::warn!("{message}: no spectates for the next {} minutes", pause.as_secs() / 60);
+                }
+                return Err(Spectate::Failed(e));
+            }
+        };
         let mut spectates = self.spectates.lock().unwrap_or_else(|e| e.into_inner());
         spectates.retain(|_, (at, _)| at.elapsed() < self.limits.spectate_ttl);
         spectates.insert(match_id, (Instant::now(), value.clone()));
@@ -542,7 +570,7 @@ fn error_response(e: &CallError) -> Response {
             reply(StatusCode::SERVICE_UNAVAILABLE, body),
             *retry_after_s,
         ),
-        CallError::Answer(GcAnswer::Busy(_)) => {
+        CallError::Answer(GcAnswer::Busy(_) | GcAnswer::RateLimited(_)) => {
             with_retry_after(reply(StatusCode::SERVICE_UNAVAILABLE, body), 60)
         }
         CallError::Answer(GcAnswer::NotReady(m)) => not_ready(m, None),
@@ -656,6 +684,7 @@ mod tests {
         spectate_calls: AtomicUsize,
         results: std::sync::Mutex<VecDeque<Result<Value, CallError>>>,
         actives: std::sync::Mutex<VecDeque<Result<Value, CallError>>>,
+        spectates: std::sync::Mutex<VecDeque<Result<Value, CallError>>>,
     }
 
     impl Backend for Fake {
@@ -677,7 +706,9 @@ mod tests {
         }
         async fn spectate(&self, match_id: u64) -> Result<Value, CallError> {
             self.spectate_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(json!({ "match_id": match_id, "broadcast_url": "http://example.test/tv/1" }))
+            self.spectates.lock().unwrap().pop_front().unwrap_or_else(|| {
+                Ok(json!({ "match_id": match_id, "broadcast_url": "http://example.test/tv/1" }))
+            })
         }
         async fn status(&self) -> Value {
             json!({ "connected": false })
@@ -707,6 +738,7 @@ mod tests {
             not_ready: Duration::from_secs(3600),
             spectate_ttl: Duration::from_secs(3600),
             stale_active: Duration::from_secs(3600),
+            rate_limited_pause: Duration::from_secs(3600),
         }
     }
 
@@ -859,6 +891,35 @@ mod tests {
         assert!(s.spectated(10).is_none());
         assert_eq!(s.backend.spectate_calls.load(Ordering::SeqCst), 1);
         assert!(matches!(s.spectate(10).await, Err(Spectate::TooSoon(_))));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_rate_limited_spectate_pauses_spectating() {
+        let limits = Limits { spectate: Duration::ZERO, rate_limited_pause: Duration::from_secs(1800), ..strict() };
+        let (s, dir) = server(limits, None);
+        let refusal = GcAnswer::RateLimited("Steam would not spectate match 9: k_eRateLimited".into());
+        s.backend.spectates.lock().unwrap().push_back(Err(CallError::Answer(refusal)));
+        assert!(matches!(
+            s.spectate(9).await,
+            Err(Spectate::Failed(CallError::Answer(GcAnswer::RateLimited(_))))
+        ));
+        // No spectate wait at all here, yet nothing goes to Steam during the pause.
+        let Err(Spectate::TooSoon(left)) = s.spectate(10).await else { panic!("expected the pause") };
+        assert!((1790..=1800).contains(&left), "{left}");
+        assert_eq!(s.backend.spectate_calls.load(Ordering::SeqCst), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_busy_coordinator_does_not_pause_spectating() {
+        let limits = Limits { spectate: Duration::ZERO, ..strict() };
+        let (s, dir) = server(limits, None);
+        let busy = GcAnswer::Busy("Steam would not spectate match 9: k_eTooBusy".into());
+        s.backend.spectates.lock().unwrap().push_back(Err(CallError::Answer(busy)));
+        assert!(matches!(s.spectate(9).await, Err(Spectate::Failed(_))));
+        assert!(s.spectate(10).await.is_ok());
+        assert_eq!(s.backend.spectate_calls.load(Ordering::SeqCst), 2);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -1,8 +1,9 @@
 //! Keeps a minimum gap between requests of the same kind, so the account doesn't look like a
 //! bot hammering Valve. deadlock-api's own bots wait even longer (about 10 minutes between live
-//! match lists and 29 minutes between spectates per account). The spectate gap is the riskiest:
-//! 3 minutes keeps the live map quick, and raising it is the first thing to do if Valve ever
-//! flags the account.
+//! match lists and 29 minutes between spectates per account). Spectating is the one Steam limits
+//! first: with a 3-minute gap it answered `k_eRateLimited` to every spectate, so the gap is 5
+//! minutes, and `serve` stops spectating for [`SPECTATE_RATE_LIMITED_PAUSE`] whenever Steam says
+//! that, since asking again soon only prolongs the limit.
 //!
 //! The times are kept in a file next to the saved login, so the command-line tool and `serve`
 //! share them when they run on the same account.
@@ -15,7 +16,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 
 pub const ACTIVE_GAP: Duration = Duration::from_secs(60);
-pub const SPECTATE_GAP: Duration = Duration::from_secs(3 * 60);
+pub const SPECTATE_GAP: Duration = Duration::from_secs(5 * 60);
+/// No spectate for this long after Steam answers one with `k_eRateLimited`.
+pub const SPECTATE_RATE_LIMITED_PAUSE: Duration = Duration::from_secs(30 * 60);
 pub const RESULT_GAP: Duration = Duration::from_secs(60);
 
 /// A request of this kind ran too recently.

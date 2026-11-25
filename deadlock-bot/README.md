@@ -8,13 +8,13 @@ It is based on deadlock-api's open-source [public-ingest](https://github.com/dea
 | --- | --- | --- |
 | `login --username <name>` | Logs in once with your password and Steam Guard, then saves a login token | none |
 | `active` | Lists live matches from the in-game Watch tab (top 200) as JSON | 1 minute |
-| `spectate <match_id>` | Prints the live broadcast URL of a match that is being played now | 3 minutes |
+| `spectate <match_id>` | Prints the live broadcast URL of a match that is being played now | 5 minutes |
 | `result <match_id>` | Prints the official result of a finished match: winner, duration, each player's K/D/A | 1 minute |
 | `serve` | Stays logged in and answers HTTP requests with deadlock-api's JSON, for the website's fallback ([below](#server-mode-serve)) | same waits, per request |
 | `live <broadcast_url>` | Prints realtime map frames (JSON lines) from a match's broadcast, for testing the live feed | none (no Steam login needed) |
 | `logout` | Deletes the saved login token | none |
 
-Add `--force` to skip the wait. The waits are there so the account doesn't look like a bot hammering Valve. deadlock-api's own bots wait longer: about 10 minutes between live lists and 29 minutes between spectates per account. The 3-minute spectate wait is far below theirs, to keep the live map quick, so it is the most likely to draw Valve's attention: if the account gets flagged, raise `SPECTATE_GAP` in `src/guard.rs` first.
+Add `--force` to skip the wait. The waits are there so the account doesn't look like a bot hammering Valve. deadlock-api's own bots wait longer: about 10 minutes between live lists and 29 minutes between spectates per account. Spectating is what Steam limits first: with a 3-minute wait it answered every spectate with `k_eRateLimited`. So the wait is 5 minutes, and when Steam does say `k_eRateLimited`, `serve` stops spectating for 30 minutes (`SPECTATE_RATE_LIMITED_PAUSE` in `src/guard.rs`), since asking again soon only prolongs the limit.
 
 ## Which Steam account to use
 
@@ -124,9 +124,9 @@ kill, purchase, level-up, ability, objective, Mid-Boss, urn and rift events. Eve
 (`z`) as well as x and y. Frames go to Redis (`live:frame:{id}` and the channel `naebka:live-frames`).
 
 Broadcast URLs come from deadlock-api's public list (`/v1/matches/live/urls`). Only matches missing from it are
-spectated with the bot account, one every 3 minutes (the spectate wait), and a match someone has open on the site is
-spectated next, before tracked matches nobody is watching. deadlock-api only lists matches some way into the game, so a
-fresh match almost always needs the bot. One feed uses about 30 MB and a few percent of a CPU core.
+spectated with the bot account: one every 5 minutes (the spectate wait), none for 30 minutes after Steam says it is
+rate limiting them, and a match someone has open on the site is spectated next, before tracked matches nobody is
+watching. deadlock-api only lists matches some way into the game, so a fresh match almost always needs the bot. One feed uses about 30 MB and a few percent of a CPU core.
 
 Things learned from live broadcasts:
 

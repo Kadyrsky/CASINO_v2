@@ -4,8 +4,8 @@
 //! Which matches: the watcher's tracked matches first (their live state also drives the odds), then any match a
 //! viewer has open on the site, up to `max_feeds`. Broadcast URLs come from deadlock-api's public list
 //! (`/v1/matches/live/urls`, free) and, when a match isn't there, from spectating it with the bot: one every
-//! [`crate::guard::SPECTATE_GAP`] (3 min), and a match someone has open is spectated next, before tracked matches
-//! nobody is watching.
+//! [`crate::guard::SPECTATE_GAP`] (5 min), none for half an hour after Steam says it is rate limiting them, and a
+//! match someone has open is spectated next, before tracked matches nobody is watching.
 //!
 //! Redis, shared with the watcher and the core:
 //! - reads `watcher:tracked` (JSON array of match ids) and the sorted set `live:wanted` (member = match id,
@@ -191,7 +191,8 @@ async fn run_once(cfg: &Config, server: &Arc<Server<SteamBackend>>, http: &reqwe
                 },
                 Err(Spectate::TooSoon(wait)) => spectate_after = Some(Instant::now() + Duration::from_secs(wait)),
                 Err(Spectate::Failed(e)) => {
-                    log::debug!("no broadcast for match {id} yet: {e:?}");
+                    // Visible: a spectate that keeps failing is why a match's map never loads.
+                    log::info!("could not spectate match {id}: {e:?}");
                     not_before.insert(id, Instant::now() + AFTER_ERROR);
                 }
             }
