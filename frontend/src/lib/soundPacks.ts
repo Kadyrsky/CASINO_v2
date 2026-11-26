@@ -2,7 +2,9 @@
  * Sound packs: what each event on the site sounds like. A pack is a set of small synth recipes (tones and filtered
  * noise, drawn by audio.ts), so it needs no files and plays without delay. The Deadlock pack also uses the game's
  * own stingers for the big moments, once they have loaded (the recipe plays until then). Which pack a visitor hears
- * is the `sfx_pack` experiment (experiments.ts); they can switch under Customize.
+ * is the `sfx_pack` experiment (experiments.ts); they can switch under Customize. The Christmas pack is sleigh bells,
+ * a celesta and a handbell, with bits of carols (Jingle Bells, We Wish You a Merry Christmas, Deck the Halls: all
+ * traditional and out of copyright).
  *
  * To add a pack: add it to PACKS and as a variant of `sfx_pack` in experiments.ts, then calibrate it (below).
  *
@@ -45,7 +47,7 @@ export type SoundEvent =
   | 'fold'
   | 'yourTurn'
   | 'potWon'
-  | 'patron'; // picking a Patron theme (n = 0 Hidden King, 1 Archmother)
+  | 'theme'; // picking a theme (n = its place: 0 Hidden King, 1 Archmother, 2 Deadlock, 3 Christmas)
 
 export type Recipe = (v: Voice, n: number) => void;
 
@@ -59,7 +61,7 @@ export const LEVELS: Record<SoundEvent, number> = {
   bet: -33, betWon: -28, betLost: -31,
   spin: -39, reelStop: -36, win: -30, streak: -29, firstWin: -29, bigWin: -26, jackpot: -24,
   freeSpins: -27, bonus: -27, bonusPick: -35, bonusEnd: -28, lose: -46,
-  deal: -41, chips: -38, check: -36, fold: -42, yourTurn: -31, potWon: -27, patron: -32,
+  deal: -41, chips: -38, check: -36, fold: -42, yourTurn: -31, potWon: -27, theme: -36,
 };
 
 export interface SoundPack {
@@ -70,6 +72,8 @@ export interface SoundPack {
   stingers?: Partial<Record<SoundEvent, (n: number) => string>>;
   /** Stingers cut short, in seconds (long intros). */
   stingerMax?: Partial<Record<SoundEvent, number>>;
+  /** How far the music ducks under an event's stinger (0..1; 0.3 if not given). */
+  stingerDuck?: Partial<Record<SoundEvent, number>>;
   /** What the Customize panel and the taste test play: [event, seconds from the start]. */
   demo: [SoundEvent, number][];
 }
@@ -158,11 +162,11 @@ const soft: SoundPack = {
       softChips(v, 0);
       softWin(v, 0);
     },
-    patron: softSelect,
+    theme: softSelect,
   },
   trim: { click: 2.5, tap: 4, select: 1.5, toggle: 1.5, close: 2, error: -3.5, bet: 7.5, betWon: 1, betLost: 1, spin: 9.5, reelStop: 1.5,
     firstWin: -1, bigWin: 2.5, jackpot: 4.5, freeSpins: 3.5, bonus: 1.5, bonusPick: 4, bonusEnd: 1, deal: 4, chips: 14, fold: 11.5,
-    potWon: 3, patron: 4.5 },
+    potWon: 3, theme: 0.5 },
   demo: [['click', 0], ['tap', 0.3], ['select', 0.6], ['bet', 0.95], ['win', 1.35]],
 };
 
@@ -255,11 +259,11 @@ const arcade: SoundPack = {
     fold: (v) => v.tone({ f: 330, to: 196, type: 'square', dur: 0.15, gain: 0.04, lp: 1500 }),
     yourTurn: (v) => arp(v, ['C6', 'G6'], { step: 0.1, dur: 0.18, type: 'triangle', gain: 0.1 }),
     potWon: arcadeBig,
-    patron: coin,
+    theme: coin,
   },
   trim: { click: 10, tap: 9.5, select: 2, toggle: 3.5, open: 2.5, close: 3.5, success: 4.5, error: 3, notify: 6, bet: 4, betWon: 6.5,
     betLost: 4, spin: 1.5, reelStop: 9, win: 6, streak: 6.5, firstWin: 7, bigWin: 3.5, jackpot: 5, freeSpins: 11.5, bonus: 10.5,
-    bonusPick: 2, bonusEnd: 8, lose: 4.5, deal: 8.5, chips: 4.5, check: 9.5, fold: 2.5, yourTurn: 5.5, potWon: 2.5, patron: 5 },
+    bonusPick: 2, bonusEnd: 8, lose: 4.5, deal: 8.5, chips: 4.5, check: 9.5, fold: 2.5, yourTurn: 5.5, potWon: 2.5, theme: 1 },
   demo: [['click', 0], ['tap', 0.3], ['select', 0.55], ['spin', 1], ['win', 1.55]],
 };
 
@@ -359,7 +363,7 @@ const deadlock: SoundPack = {
       clacks(v);
       tada(v, 0);
     },
-    patron: brassSelect,
+    theme: brassSelect,
   },
   stingers: {
     firstWin: () => 'first-blood',
@@ -374,16 +378,171 @@ const deadlock: SoundPack = {
     betWon: () => 'rejuv-won',
     betLost: () => 'rejuv-lost',
     potWon: () => 'guardian-down',
-    patron: (n) => (n === 1 ? 'mother-intro' : 'king-intro'),
+    // The title screen's soft swell into the hideout: picking a theme is a change of scene, not a fanfare (the
+    // Patrons' match intros used here before were loud brass, and tiring when trying the themes one after another).
+    theme: () => 'transition',
   },
   trim: { click: 3.5, tap: 15.5, select: 7.5, toggle: 14.5, open: 5.5, close: 7.5, success: 10, error: 10, bet: 6, betWon: 10.5,
     betLost: 9, spin: 10.5, reelStop: -4, win: 8.5, streak: 9.5, firstWin: 9.5, bigWin: 11.5, jackpot: 6, freeSpins: 3, bonus: 8,
-    bonusPick: 7.5, bonusEnd: 10.5, deal: 3.5, chips: 14, check: -2.5, fold: 12.5, potWon: 11.5, patron: 10.5 },
-  stingerMax: { patron: 6 },
+    bonusPick: 7.5, bonusEnd: 10.5, deal: 3.5, chips: 14, check: -2.5, fold: 12.5, potWon: 11.5, theme: 6.5 },
+  stingerMax: { theme: 4.5 },
+  stingerDuck: { theme: 0.7 },
   demo: [['click', 0], ['tap', 0.3], ['select', 0.55], ['spin', 0.95], ['firstWin', 1.75]],
 };
 
-export const PACKS: Record<string, SoundPack> = { deadlock, arcade, soft };
+// ---- Christmas: sleigh bells, a celesta, a handbell, and the first notes of carols ----
+
+/** A celesta note: a pure tone with a soft octave and a quick, bright third harmonic. */
+const celesta = (v: Voice, note: string, at: number, dur = 0.4, gain = 0.07, shift = 0) => {
+  const f = hz(note, shift);
+  v.tone({ f, at, dur, gain, attack: 0.003 });
+  v.tone({ f: f * 2, at, dur: dur * 0.6, gain: gain * 0.35, attack: 0.002 });
+  v.tone({ f: f * 3, at, dur: dur * 0.25, gain: gain * 0.12, attack: 0.002 });
+};
+/** A tune on the celesta: notes with their beat (counted from the first note), `beat` seconds long. */
+const tune = (v: Voice, notes: [string, number][], beat: number, o: { at?: number; dur?: number; gain?: number; shift?: number } = {}) => {
+  const first = notes[0]?.[1] ?? 0;
+  for (const [note, b] of notes) celesta(v, note, (o.at ?? 0) + (b - first) * beat, o.dur ?? 0.4, o.gain ?? 0.07, o.shift ?? 0);
+};
+/** One shake of sleigh bells: a few tiny bells struck at once. */
+const jingle = (v: Voice, at: number, gain = 0.05) => {
+  for (let i = 0; i < 4; i++) {
+    const t = at + i * 0.011 + Math.random() * 0.008;
+    v.noise({ at: t, dur: 0.07 + Math.random() * 0.05, band: 6000 + Math.random() * 3000, q: 7, gain });
+    v.tone({ f: 3800 + Math.random() * 2800, at: t, dur: 0.1, gain: gain * 0.3 });
+  }
+};
+/** Sleigh bells shaken in time: `times` shakes, `step` seconds apart, every other one lighter. */
+const sleigh = (v: Voice, at: number, times: number, step: number, gain = 0.05) => {
+  for (let i = 0; i < times; i++) jingle(v, at + i * step, i % 2 ? gain * 0.7 : gain);
+};
+/** A handbell: a bell's partials, long and soft. */
+const handbell = (v: Voice, note: string, at = 0, gain = 0.09) => {
+  const f = hz(note);
+  v.tone({ f, at, dur: 1.1, gain });
+  v.tone({ f: f * 2.76, at, dur: 0.6, gain: gain * 0.3 });
+  v.tone({ f: f * 5.4, at, dur: 0.3, gain: gain * 0.12 });
+};
+
+/** Jingle Bells' chorus, in beats: "jin-gle bells, jin-gle bells, jin-gle all the way". */
+const JINGLE_BELLS: [string, number][] = [
+  ['E6', 0], ['E6', 1], ['E6', 2], ['E6', 4], ['E6', 5], ['E6', 6], ['E6', 8], ['G6', 9], ['C6', 10], ['D6', 10.75], ['E6', 11],
+];
+const JINGLE = JINGLE_BELLS.slice(0, 3); // "jin-gle bells"
+const ALL_THE_WAY = JINGLE_BELLS.slice(6); // "jin-gle all the way"
+/** "We wish you a merry Christmas". */
+const WE_WISH: [string, number][] = [['D6', 0], ['G6', 1], ['G6', 1.5], ['A6', 2], ['G6', 2.5], ['F#6', 3], ['E6', 3.5], ['E6', 4.5]];
+/** "Deck the halls with boughs of holly". */
+const DECK_THE_HALLS: [string, number][] = [['G6', 0], ['F6', 0.75], ['E6', 1], ['D6', 1.5], ['C6', 2], ['D6', 2.5], ['E6', 3], ['C6', 3.5]];
+const chime = (v: Voice, notes: string[], at: number, dur: number, gain = 0.035) => notes.forEach((n) => celesta(v, n, at, dur, gain));
+
+const christmas: SoundPack = {
+  sounds: {
+    click: (v) => {
+      celesta(v, 'E7', 0, 0.18, 0.08);
+      v.noise({ dur: 0.015, band: 7000, q: 6, gain: 0.12 });
+    },
+    // One tiny bell.
+    tap: (v) => v.noise({ dur: 0.04, band: 7500, q: 8, gain: 0.18 }),
+    select: (v) => tune(v, [['G6', 0], ['C7', 1]], 0.07, { dur: 0.3 }),
+    toggle: (v) => {
+      jingle(v, 0, 0.04);
+      jingle(v, 0.09, 0.03);
+    },
+    open: (v) => tune(v, [['C6', 0], ['E6', 1], ['G6', 2]], 0.04, { dur: 0.25 }),
+    close: (v) => tune(v, [['G6', 0], ['E6', 1], ['C6', 2]], 0.04, { dur: 0.25 }),
+    success: (v) => {
+      tune(v, [['E6', 0], ['G6', 1], ['C7', 2]], 0.07, { dur: 0.35 });
+      jingle(v, 0.14, 0.03);
+    },
+    error: (v) => {
+      v.tone({ f: hz('E4'), type: 'triangle', dur: 0.16, gain: 0.12, lp: 1200 });
+      v.tone({ f: hz('C4'), type: 'triangle', at: 0.12, dur: 0.22, gain: 0.12, lp: 1000 });
+    },
+    notify: (v) => handbell(v, 'G5'),
+    bet: (v) => {
+      jingle(v, 0, 0.05);
+      celesta(v, 'C7', 0.02, 0.25, 0.05);
+    },
+    betWon: (v) => {
+      tune(v, JINGLE, 0.13);
+      sleigh(v, 0, 3, 0.13, 0.035);
+    },
+    betLost: (v) => tune(v, [['E6', 0], ['D#6', 1], ['D6', 2]], 0.16, { dur: 0.5, gain: 0.05 }),
+    // Sleigh bells speeding up, like the reels.
+    spin: (v) => {
+      let at = 0;
+      for (let i = 0; i < 7; i++) {
+        jingle(v, at, 0.04);
+        at += 0.1 - i * 0.008;
+      }
+    },
+    reelStop: (v, n) => {
+      v.tone({ f: 150, to: 90, dur: 0.08, gain: 0.2 });
+      celesta(v, 'C6', 0.01, 0.2, 0.04, n * 2);
+    },
+    win: (v) => {
+      tune(v, ALL_THE_WAY, 0.1);
+      jingle(v, 0.3, 0.04);
+    },
+    streak: (v, n) => {
+      tune(v, [['C6', 0], ['E6', 1], ['G6', 2], ['C7', 3]], 0.06, { dur: 0.3, shift: Math.min(n, 7) });
+      jingle(v, 0.2, 0.035);
+    },
+    firstWin: (v) => {
+      tune(v, WE_WISH, 0.14);
+      sleigh(v, 0.63, 2, 0.14, 0.035);
+    },
+    bigWin: (v) => {
+      tune(v, ALL_THE_WAY, 0.1);
+      chime(v, ['C6', 'E6', 'G6'], 0.4, 1.2);
+      sleigh(v, 0, 8, 0.1, 0.035);
+    },
+    jackpot: (v) => {
+      tune(v, JINGLE_BELLS, 0.12);
+      sleigh(v, 0, 14, 0.12, 0.035);
+      chime(v, ['C6', 'E6', 'G6', 'C7'], 1.32, 1.4, 0.03);
+    },
+    freeSpins: (v) => {
+      tune(v, [['C6', 0], ['D6', 1], ['E6', 2], ['F6', 3], ['G6', 4], ['A6', 5], ['B6', 6], ['C7', 7]], 0.045, { dur: 0.3, gain: 0.05 });
+      sleigh(v, 0.36, 3, 0.1, 0.04);
+    },
+    bonus: (v) => tune(v, DECK_THE_HALLS, 0.11, { dur: 0.35 }),
+    bonusPick: (v) => {
+      celesta(v, 'G6', 0, 0.3, 0.07);
+      jingle(v, 0.02, 0.03);
+    },
+    bonusEnd: (v) => {
+      tune(v, [['G5', 0], ['C6', 1], ['E6', 2], ['G6', 3]], 0.08);
+      chime(v, ['C6', 'E6', 'G6'], 0.32, 1);
+      sleigh(v, 0.32, 4, 0.1, 0.035);
+    },
+    lose: silent,
+    deal: (v) => v.noise({ dur: 0.045, hp: 2500, gain: 0.1 }),
+    // Glass baubles touching.
+    chips: (v) => [0, 0.05, 0.11].forEach((at, i) => v.tone({ f: 4200 + i * 500, at, dur: 0.08, gain: 0.04 })),
+    check: (v) => [0, 0.1].forEach((at) => v.tone({ f: 190, type: 'triangle', at, dur: 0.06, gain: 0.15, lp: 800 })),
+    fold: (v) => v.noise({ dur: 0.2, band: 1200, to: 300, gain: 0.08, attack: 0.04 }),
+    yourTurn: (v) => {
+      handbell(v, 'G5');
+      handbell(v, 'C6', 0.18, 0.07);
+    },
+    potWon: (v) => {
+      sleigh(v, 0, 3, 0.08, 0.04);
+      tune(v, ALL_THE_WAY, 0.1, { at: 0.1 });
+    },
+    theme: (v) => {
+      sleigh(v, 0, 2, 0.12, 0.04);
+      tune(v, JINGLE, 0.12, { dur: 0.3, gain: 0.05 });
+    },
+  },
+  trim: { click: 5.5, tap: 12, toggle: 7, open: -5, close: -5, error: 1.5, bet: 8, betWon: 3.5, betLost: 3, spin: 3.5, reelStop: -1,
+    streak: 3, bigWin: 3.5, jackpot: 4, freeSpins: 5, bonus: 2, bonusPick: 3, bonusEnd: 1.5, deal: 5, chips: 6, check: 1.5, fold: 12.5,
+    yourTurn: -2.5, potWon: 3 },
+  demo: [['click', 0], ['tap', 0.3], ['select', 0.55], ['spin', 0.95], ['win', 1.75]],
+};
+
+export const PACKS: Record<string, SoundPack> = { deadlock, arcade, soft, christmas };
 
 /**
  * Calibration (a developer tool): renders each of the pack's recipes offline and returns the trim that brings it to

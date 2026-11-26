@@ -1,182 +1,242 @@
 {
- "hotel": {
-  "duration": 63.9,
-  "bytes": 1019461,
-  "lufs": -32.5
- },
- "curio": {
-  "duration": 112.35,
-  "bytes": 3567572,
-  "lufs": -20.2
- },
- "waltz": {
-  "duration": 54.18,
-  "bytes": 864858,
-  "lufs": -23.7
- },
- "rem": {
-  "duration": 165.07,
-  "bytes": 5180428,
-  "lufs": -20.0
- },
  "title": {
-  "duration": 170.06,
+  "duration": 170.0,
+  "lead": 0.025057,
   "bytes": 5157354,
   "lufs": -10.3
  },
- "hideout": {
-  "duration": 43.42,
+ "hideout-base": {
+  "duration": 43.354853,
+  "lead": 0.025057,
   "bytes": 1493699,
   "lufs": -16.3
  },
- "postgame": {
-  "duration": 44.07,
-  "bytes": 1453925,
-  "lufs": -7.5
+ "hideout-low": {
+  "duration": 43.354853,
+  "lead": 0.025057,
+  "bytes": 1318592,
+  "lufs": -22.7
  },
- "draft": {
-  "duration": 62.59,
-  "bytes": 2017359,
-  "lufs": -8.5
+ "hideout-high": {
+  "duration": 43.354853,
+  "lead": 0.025057,
+  "bytes": 1386711,
+  "lufs": -13.7
  },
- "menu-old": {
-  "duration": 247.09,
-  "bytes": 5765383,
-  "lufs": -13.9
+ "search-wait": {
+  "duration": 342.813084,
+  "lead": 0.025057,
+  "bytes": 2842953,
+  "lufs": -28.6
+ },
+ "connecting-old": {
+  "duration": 269.0,
+  "lead": 0.025057,
+  "bytes": 7731756,
+  "lufs": -14.6
+ },
+ "hotel": {
+  "duration": 63.831655,
+  "lead": 0.025057,
+  "bytes": 1019461,
+  "lufs": -32.5
+ },
+ "hotel-far": {
+  "duration": 63.831655,
+  "lead": 0.025057,
+  "bytes": 1019356,
+  "lufs": -28.7
+ },
+ "curio": {
+  "duration": 112.29805,
+  "lead": 0.025057,
+  "bytes": 3567572,
+  "lufs": -20.2
+ },
+ "curio-alt": {
+  "duration": 137.607778,
+  "lead": 0.025057,
+  "bytes": 4281766,
+  "lufs": -18.3
+ },
+ "winter-menu": {
+  "duration": 480.0,
+  "lead": 0.025057,
+  "bytes": 7840421,
+  "lufs": -16.4
+ },
+ "winter-shop": {
+  "duration": 59.10449,
+  "lead": 0.025057,
+  "bytes": 1847195,
+  "lufs": -19.5
+ },
+ "winter-secret": {
+  "duration": 137.619637,
+  "lead": 0.025057,
+  "bytes": 4041114,
+  "lufs": -28.8
+ },
+ "waltz": {
+  "duration": 54.109456,
+  "lead": 0.025057,
+  "bytes": 864858,
+  "lufs": -23.7
  },
  "choir": {
-  "duration": 54.54,
+  "duration": 54.487075,
+  "lead": 0.025057,
   "bytes": 870801,
   "lufs": -24.0
  },
- "vault": {
-  "duration": 13.22,
-  "bytes": 221696,
-  "lufs": -21.3
+ "teleporter": {
+  "duration": 53.26873,
+  "lead": 0.025057,
+  "bytes": 1661829,
+  "lufs": -15.0
  },
- "rift": {
-  "duration": 24.06,
-  "bytes": 770065,
-  "lufs": -9.1
+ "teleporter-comp": {
+  "duration": 24.742268,
+  "lead": 0.025057,
+  "bytes": 423900,
+  "lufs": -15.1
  },
- "urn": {
-  "duration": 47.73,
-  "bytes": 1526128,
-  "lufs": -16.6
+ "teleporter-melody": {
+  "duration": 24.742268,
+  "lead": 0.025057,
+  "bytes": 410914,
+  "lufs": -24.4
  },
- "core": {
-  "duration": 44.93,
-  "bytes": 1483107,
-  "lufs": -13.0
+ "price": {
+  "duration": 49.0,
+  "lead": 0.025057,
+  "bytes": 597235,
+  "lufs": -19.7
  },
  "ks-01": {
-  "duration": 5.98,
+  "duration": 5.911156,
+  "lead": 0.025057,
   "bytes": 204816,
   "lufs": -8.8
  },
  "ks-02": {
-  "duration": 6.22,
+  "duration": 6.163878,
+  "lead": 0.025057,
   "bytes": 207626,
   "lufs": -9.6
  },
  "ks-03": {
-  "duration": 6.22,
+  "duration": 6.152426,
+  "lead": 0.025057,
   "bytes": 204917,
   "lufs": -9.5
  },
  "ks-04": {
-  "duration": 5.2,
+  "duration": 5.131247,
+  "lead": 0.025057,
   "bytes": 173605,
   "lufs": -8.8
  },
  "ks-05": {
-  "duration": 5.98,
+  "duration": 5.905079,
+  "lead": 0.025057,
   "bytes": 193010,
   "lufs": -8.4
  },
  "ks-06": {
-  "duration": 5.8,
+  "duration": 5.732177,
+  "lead": 0.025057,
   "bytes": 192186,
   "lufs": -8.4
  },
  "ks-07": {
-  "duration": 5.25,
+  "duration": 5.193265,
+  "lead": 0.025057,
   "bytes": 177252,
   "lufs": -8.5
  },
  "ks-08": {
-  "duration": 5.25,
+  "duration": 5.186961,
+  "lead": 0.025057,
   "bytes": 173077,
   "lufs": -8.3
  },
  "ks-09": {
-  "duration": 5.46,
+  "duration": 5.40585,
+  "lead": 0.025057,
   "bytes": 184252,
   "lufs": -8.4
  },
  "ks-10": {
-  "duration": 6.97,
+  "duration": 6.912086,
+  "lead": 0.025057,
   "bytes": 236028,
   "lufs": -8.0
  },
  "first-blood": {
-  "duration": 4.83,
+  "duration": 4.773401,
+  "lead": 0.025057,
   "bytes": 153345,
   "lufs": -9.2
  },
  "urn-arrived": {
-  "duration": 6.87,
+  "duration": 6.808503,
+  "lead": 0.025057,
   "bytes": 208682,
   "lufs": -13.4
  },
  "urn-delivered": {
-  "duration": 7.16,
+  "duration": 7.082041,
+  "lead": 0.025057,
   "bytes": 213675,
   "lufs": -11.7
  },
  "rift-announce": {
-  "duration": 7.58,
+  "duration": 7.521678,
+  "lead": 0.025057,
   "bytes": 237077,
   "lufs": -12.0
  },
  "rift-secured": {
-  "duration": 7.16,
+  "duration": 7.104739,
+  "lead": 0.025057,
   "bytes": 206174,
   "lufs": -9.1
  },
  "victory": {
-  "duration": 8.59,
+  "duration": 8.534762,
+  "lead": 0.025057,
   "bytes": 269537,
   "lufs": -6.9
  },
  "defeat": {
-  "duration": 7.68,
+  "duration": 7.624104,
+  "lead": 0.025057,
   "bytes": 230493,
   "lufs": -8.6
  },
  "rejuv-won": {
-  "duration": 8.39,
+  "duration": 8.316236,
+  "lead": 0.025057,
   "bytes": 261907,
   "lufs": -9.5
  },
  "rejuv-lost": {
-  "duration": 4.83,
+  "duration": 4.773084,
+  "lead": 0.025057,
   "bytes": 122550,
   "lufs": -14.1
  },
  "guardian-down": {
-  "duration": 3.6,
+  "duration": 3.527982,
+  "lead": 0.025057,
   "bytes": 101672,
   "lufs": -10.7
  },
- "king-intro": {
-  "duration": 27.06,
-  "bytes": 955746,
-  "lufs": -10.4
- },
- "mother-intro": {
-  "duration": 28.94,
-  "bytes": 937113,
-  "lufs": -11.6
+ "transition": {
+  "duration": 5.714082,
+  "lead": 0.025057,
+  "bytes": 186655,
+  "lufs": -14.8
  }
 }

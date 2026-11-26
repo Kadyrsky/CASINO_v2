@@ -72,10 +72,10 @@
 }
 
 /*
- * A/B experiment "theme" (src/lib/experiments.ts). Three Deadlock themes share one calm base, after the fan site
+ * A/B experiment "theme" (src/lib/experiments.ts). The themes share one calm base, after the fan site
  * thedeadlockobservatory.com: a near-neutral slate page, solid panels, soft off-white text, and one accent colour
- * used sparingly. Each theme only tints the slate slightly and picks its accent. The live-map team colours
- * (amber-team / sapphire-team) stay as they are, since they mean a team, not the theme. Classic keeps the old look.
+ * used sparingly. Each theme only tints the slate and picks its accent. The live-map team colours
+ * (amber-team / sapphire-team) stay as they are, since they mean a team, not the theme.
  */
 :root[data-ab-style='deadlock'] {
   --color-ink-950: #191d23;
@@ -140,6 +140,23 @@
   --patron-tile: url('/images/deadlock-tile.webp');
 }
 
+/* Christmas: holly red on pine green, snowflakes drifting in the background and snow falling (Snowfall.tsx). */
+:root[data-ab-theme='christmas'] {
+  --color-gold-300: #f6c1c4;
+  --color-gold-400: #ef9196;
+  --color-gold-500: #e3646a;
+  --color-gold-600: #c4444b;
+
+  --color-ink-950: #0f1a15;
+  --color-ink-900: #16241e;
+  --color-ink-850: #13201a;
+  --color-ink-800: #1d2d26;
+  --color-ink-700: #26382f;
+  --color-ink-600: #314439;
+
+  --patron-tile: url('/images/christmas-tile.webp');
+}
+
 @layer base {
   html {
     color-scheme: dark;
@@ -160,8 +177,8 @@
 }
 
 /*
- * Deadlock style, on with the Deadlock themes (data-ab-style="deadlock", set in src/lib/experiments.ts).
- * The Classic theme keeps the old look.
+ * Deadlock style, on with every theme (data-ab-style="deadlock", set in src/lib/experiments.ts; the old Classic
+ * theme went without it).
  */
 :root[data-ab-style='deadlock'] {
   /* Sharper, less rounded panels and buttons (rounded-full pills stay round). */
@@ -198,7 +215,7 @@
   background-color: color-mix(in oklab, var(--color-ink-950) 92%, transparent);
 }
 
-/* The theme's emblem (a Patron, or the Deadlock eye) drifts slowly and diagonally across the background. */
+/* The theme's emblem (a Patron, the Deadlock eye, a snowflake) drifts slowly and diagonally across the background. */
 .patron-bg {
   display: none;
 }
@@ -217,6 +234,11 @@
   mask-repeat: repeat;
   animation: patron-drift 90s linear infinite;
   will-change: transform;
+}
+/* Snowflakes are white, not holly red. */
+:root[data-ab-theme='christmas'] .patron-bg {
+  background: #fff;
+  opacity: 0.04;
 }
 @keyframes patron-drift {
   from {

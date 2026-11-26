@@ -1,6 +1,6 @@
 /**
  * The "Customize" button in the header: a drop-down where anyone can switch the A/B experiments they can see or hear
- * (theme and slot symbols under Look; music station and sound pack under Sound), with the page staying visible
+ * (theme and slot symbols under Look; music pack, its version and sound pack under Sound), with the page staying visible
  * underneath so they see the change straight away. A dot marks the button until it has been opened once; the
  * first-visit invitation to the taste test (TasteTest.tsx) points people here too.
  */
@@ -14,8 +14,11 @@ import { artOf } from './variantArt';
 
 function LookSettings() {
   const choose = (key: string, id: string) => {
+    if (ab.committed(key) === id) return;
     ab.choose(key, id);
-    if (key === 'theme' && (id === 'hidden_king' || id === 'archmother')) sounds.play('patron', id === 'archmother' ? 1 : 0);
+    // A theme has its own soft cue instead of the click (a new one cuts the last one off, so trying them all in a
+    // row doesn't stack them).
+    if (key === 'theme') sounds.theme(id);
   };
   return (
     <div class="flex flex-col gap-4">
@@ -32,6 +35,7 @@ function LookSettings() {
                     <button
                       role="radio"
                       aria-checked={selected()}
+                      data-sound={exp.key === 'theme' ? 'none' : undefined}
                       onClick={() => choose(exp.key, v.id)}
                       class={`flex flex-col items-start gap-2 rounded-xl p-2.5 text-left transition-all ${
                         selected() ? `ring-2 ${p?.ring ?? 'ring-gold-400'}` : 'opacity-75 ring-1 ring-ink-700 hover:opacity-100'
@@ -66,7 +70,7 @@ function CustomizePanel() {
     <div
       role="dialog"
       aria-label="Customize"
-      class="fixed inset-x-4 top-16 z-50 max-h-[calc(100vh-5rem)] animate-pop overflow-y-auto rounded-2xl border border-ink-600 bg-ink-900/97 p-4 shadow-2xl backdrop-blur sm:absolute sm:inset-x-auto sm:right-0 sm:top-12 sm:w-[22rem]"
+      class="fixed inset-x-4 top-16 z-50 max-h-[calc(100vh-5rem)] animate-pop overflow-y-auto rounded-2xl border border-ink-600 bg-ink-900/97 p-4 shadow-2xl backdrop-blur sm:absolute sm:inset-x-auto sm:right-0 sm:top-12 sm:w-[24rem]"
     >
       <div class="flex items-start justify-between gap-2">
         <div>

@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import { lazy } from 'solid-js';
 import Layout from './components/Layout';
 import { RequireAuth } from './components/RequireAuth';
+import { Snowfall } from './components/Snowfall';
 import Lobby from './pages/Lobby';
 
 // Game screens are loaded on demand (Frontend doc: mindful loading of game-specific functionality).
@@ -40,6 +41,8 @@ export default function App() {
         <Route path="/admin" component={() => <RequireAuth admin><Admin /></RequireAuth>} />
         <Route path="*" component={() => <p class="py-24 text-center text-ink-400">Page not found.</p>} />
       </Router>
+      {/* The Christmas theme's falling snow. */}
+      <Snowfall />
     </QueryClientProvider>
   );
 }

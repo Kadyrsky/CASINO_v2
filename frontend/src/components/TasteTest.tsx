@@ -5,15 +5,19 @@
  * same person, which says far more per visitor than splitting a hundred people into groups; the dashboard ranks
  * the versions from all answers (docs/ab-testing.md).
  *
+ * The music is asked about at two levels: after "which music?", a pack with several versions (the hideout loop's
+ * tempos, the hotel's record near or far...) gets a follow-up, "which version of it?", for the pack just picked.
+ *
  * Pairs are drawn at random among the candidates (not pickOnly) and sides are shuffled, so neither the pair nor
  * the side favours a version. Every answer is sent straight away, so stopping halfway still counts.
  */
 import { createSignal, For, onCleanup, Show } from 'solid-js';
 import { ab, EXPERIMENTS, experiment, variantLabel, type Experiment } from '../lib/experiments';
-import { stationAvailable } from '../lib/musicCatalog';
+import { packAvailable, versionAvailable } from '../lib/musicCatalog';
+import { packOfExperiment, versionExperiment } from '../lib/musicPacks';
 import { customize, tasteTest } from '../lib/panels';
 import { prompts } from '../lib/prompts';
-import { sounds } from '../lib/sounds';
+import { previewKey, sounds } from '../lib/sounds';
 import { QuickRating } from './QuickRating';
 import { artOf } from './variantArt';
 
@@ -46,7 +50,9 @@ const pairId = (key: string, a: string, b: string) => `${key}:${[a, b].sort().jo
 
 function candidates(e: Experiment): string[] {
   const ids = e.variants.filter((v) => !v.pickOnly).map((v) => v.id);
-  return e.key === 'music' ? ids.filter(stationAvailable) : ids;
+  if (e.key === 'music_pack') return ids.filter(packAvailable);
+  const pack = packOfExperiment(e.key);
+  return pack ? ids.filter((id) => versionAvailable(pack, id)) : ids;
 }
 
 /** A random pair of this experiment the visitor hasn't answered yet, on random sides. */
@@ -63,9 +69,23 @@ function roundFor(e: Experiment): Round | null {
   return { key: e.key, left, right, started: Date.now() };
 }
 
-/** One round per taste experiment that still has a pair to ask. */
+/** The follow-up "which version?" for a music pack, if it has versions with a pair still to ask. */
+function versionRound(pack: string): Round | null {
+  const key = versionExperiment(pack);
+  return key ? roundFor(experiment(key)) : null;
+}
+
+/**
+ * One round per taste experiment that still has a pair to ask. The music packs' versions are asked as a follow-up
+ * to the music question (see answer()), or on their own for the visitor's pack once the packs are all compared.
+ */
 function plan(): Round[] {
-  return EXPERIMENTS.filter((e) => e.taste).flatMap((e) => roundFor(e) ?? []);
+  return EXPERIMENTS.filter((e) => e.taste && !e.parent).flatMap((e) => {
+    const r = roundFor(e);
+    if (e.key !== 'music_pack') return r ?? [];
+    if (r) return r;
+    return versionRound(ab.committed('music_pack')) ?? [];
+  });
 }
 
 export const tasteTestAvailable = () => plan().length > 0;
@@ -73,7 +93,7 @@ export const tasteTestAvailable = () => plan().length > 0;
 function Tile(props: { round: Round; id: string; tried: boolean; onTry: () => void; onPick: () => void; canPick: boolean }) {
   const exp = () => experiment(props.round.key);
   const art = () => artOf(props.round.key, props.id);
-  const playing = () => sounds.previewing() === `music:${props.id}`;
+  const playing = () => sounds.previewing() === previewKey(props.round.key, props.id);
   const showing = () => exp().taste?.tryBy === 'page' && ab.variant(props.round.key) === props.id;
   const action = () => {
     const by = exp().taste?.tryBy;
@@ -144,8 +164,10 @@ function Test() {
     const r = round();
     if (!r) return;
     const by = experiment(r.key).taste?.tryBy;
-    if (r.key === 'music') sounds.previewStation(id);
-    else if (r.key === 'sfx_pack') sounds.previewPack(id);
+    const pack = packOfExperiment(r.key);
+    if (r.key === 'music_pack') sounds.previewPack(id);
+    else if (pack) sounds.previewVersion(pack, id);
+    else if (r.key === 'sfx_pack') sounds.previewSounds(id);
     else {
       ab.preview(r.key, id);
       sounds.play('select');
@@ -169,8 +191,13 @@ function Test() {
     if (winner) {
       ab.choose(r.key, winner, 'taste_test');
       setPicks({ ...picks(), [r.key]: winner });
-      if (r.key === 'theme' && (winner === 'hidden_king' || winner === 'archmother')) sounds.play('patron', winner === 'archmother' ? 1 : 0);
+      if (r.key === 'theme') sounds.theme(winner);
       else sounds.play('select');
+    }
+    // After the music: which version of the pack just picked (or the one they're on), if it has versions to compare.
+    if (r.key === 'music_pack') {
+      const follow = versionRound(winner ?? ab.committed('music_pack'));
+      if (follow && !rounds().some((x) => x.key === follow.key)) setRounds([...rounds().slice(0, index() + 1), follow, ...rounds().slice(index() + 1)]);
     }
     const next = index() + 1;
     if (next < rounds().length) {
@@ -288,7 +315,7 @@ function Invite() {
     >
       <p class="text-sm font-semibold text-ink-100">Make Naebka yours</p>
       <p class="mt-1 text-xs text-ink-300">
-        Choose the look, music and sounds you like: four quick “this or that” picks, about half a minute. Your answers also help us
+        Choose the look, music and sounds you like: a few quick “this or that” picks, about half a minute. Your answers also help us
         pick what everyone gets.
       </p>
       <div class="mt-3 flex justify-end gap-2">
