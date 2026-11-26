@@ -79,14 +79,22 @@ const PARTICIPANTS: u64 = fxhash::hash_bytes(b"m_vecParticipants");
 const UNSET: f32 = 1e30;
 
 /// Map objectives: serializer name hash → kind shown on the map.
-const OBJECTIVES: [(u64, &str); 6] = [
+const OBJECTIVES: [(u64, &str); 7] = [
     (fxhash::hash_bytes(b"CNPC_TrooperBoss"), "guardian"),
     (fxhash::hash_bytes(b"CNPC_Boss_Tier2"), "walker"),
     (fxhash::hash_bytes(b"CNPC_BarrackBoss"), "base_guardian"),
+    // Each team's two shrines in its base, which guard its patron ("destroyable_building" in the game's files, the
+    // "Titan shield generators" of its objective list). As seen on live broadcasts: no lane, and gone once destroyed.
+    (fxhash::hash_bytes(b"CCitadel_Destroyable_Building"), "shrine"),
     (fxhash::hash_bytes(b"CNPC_Boss_Tier3"), "patron"),
     (fxhash::hash_bytes(b"CNPC_Boss_Tier3Core"), "patron_core"),
     (fxhash::hash_bytes(b"CNPC_MidBoss"), "midboss"),
 ];
+
+/// The kind of map objective an entity of this class (its serializer name's hash) is, if it is one.
+fn objective_kind(class: u64) -> Option<&'static str> {
+    OBJECTIVES.iter().find(|(hash, _)| *hash == class).map(|&(_, kind)| kind)
+}
 
 macro_rules! key {
     ($($part:literal),+) => {
@@ -594,7 +602,7 @@ impl Sampler {
                 if let (Some(hero), Some(team)) = (hero, team(e)) {
                     pawns.insert((hero, team), e);
                 }
-            } else if let Some(&(_, kind)) = OBJECTIVES.iter().find(|(hash, _)| e.serializer_name_heq(*hash)) {
+            } else if let Some(kind) = objective_kind(e.serializer().serializer_name.hash) {
                 let hp = int32(e, key!("m_iHealth")).unwrap_or(0);
                 let Some((x, y, z)) = origin(e) else { continue };
                 if hp <= 0 {
@@ -1032,6 +1040,19 @@ mod tests {
         assert!(near(world_coord(62, 992.031_25), -32.0, 0.1));
         // The Mid-Boss in its pit (its camp timer: z -832).
         assert!(near(world_coord(62, 201.093_75), -832.0, 10.0));
+    }
+
+    #[test]
+    fn shrines_and_patrons_are_objectives() {
+        // The classes of each team's two shrines and its patron, as on live broadcasts (Nov 2026).
+        let kind = |class: &str| objective_kind(fxhash::hash_bytes(class.as_bytes()));
+        assert_eq!(kind("CCitadel_Destroyable_Building"), Some("shrine"));
+        assert_eq!(kind("CNPC_Boss_Tier3"), Some("patron"));
+        assert_eq!(kind("CNPC_Boss_Tier3Core"), Some("patron_core"));
+        assert_eq!(kind("CNPC_BarrackBoss"), Some("base_guardian"));
+        // Other entities aren't objectives.
+        assert_eq!(kind("CCitadelPlayerPawn"), None);
+        assert_eq!(kind("CNPC_Neutral_SinnersSacrifice"), None);
     }
 
     #[test]

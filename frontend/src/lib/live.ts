@@ -67,8 +67,9 @@ export const URN_ICON = '/icons/objectives/urn.webp';
 export const RIFT_ICON = '/icons/objectives/rift.webp';
 
 /**
- * A map objective's icon from the Deadlock Wiki (see scripts/wiki_icons.py). Patrons show their team's glyph; base
- * guardians, a different statue for each team, their team's.
+ * A map objective's icon from the Deadlock Wiki (see scripts/wiki_icons.py), the shrines' from the game's files (see
+ * scripts/map_objects.py). Patrons show their team's glyph; base guardians, a different statue for each team, their
+ * team's.
  */
 export function objectiveIcon(kind: ObjectiveKind, team: 0 | 1 | null): string | null {
   switch (kind) {
@@ -78,6 +79,8 @@ export function objectiveIcon(kind: ObjectiveKind, team: 0 | 1 | null): string |
       return `/icons/objectives/base-guardian-${team ?? 0}.webp`;
     case 'walker':
       return '/icons/objectives/walker.webp';
+    case 'shrine':
+      return '/icons/objectives/shrine.webp';
     case 'patron':
     case 'patron_core':
       return team == null ? null : `/icons/objectives/patron-${team}.webp`;

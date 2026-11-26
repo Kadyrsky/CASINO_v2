@@ -205,7 +205,8 @@ mode and player, plus the rank spread. It refreshes every 30 s. Matches you can 
 betting page; the others open `/live/{matchId}`.
 
 **Realtime map** (match page and `/live/{matchId}`): the minimap with every hero (portrait, team ring, health bar,
-respawn timer, a gold dot when the ultimate is ready), the lanes, the objectives with their health, and:
+respawn timer, a gold dot when the ultimate is ready), the lanes, the objectives with their health (guardians,
+walkers, base guardians, each team's two shrines and its patron, and the Mid-Boss), and:
 
 * the **Soul Urn** on the ground or on its carrier, with the pad it has to reach and its value in souls;
 * the **Unstable Rift**: a countdown while it appears, then each team's capture progress, a pulsing ring while both
@@ -230,11 +231,13 @@ markers standing on it: heroes on stems with their shadows, objectives on pillar
 around them, rings on the ground for the rift, the urn's pad and the selected hero. **2.5D** raises the buildings of
 the minimap ("Buildings" lays them flat); **3D** shows the game's own map, simplified, in the game's colours, with
 everything at its real height: heroes on a bridge, a roof or a zipline, or in a tunnel, the Sinner's Sacrifices on
-their roofs, and the ziplines hanging where they are. The guardians, walkers and base guardians stand there as the
-game's own models, in their team's colours and facing the way the game places them, with their markers over their
-heads, and the bridge power-ups as the crystal the game shows. Zoomed out they're drawn up to 2.5 times their size so
-they read among buildings ten times their height (zoomed in, true to size), and what the city hides of them (base
-guardians stand in halls, the others in streets between towers) shows through faintly. **Underground and indoors**:
+their roofs, and the ziplines hanging where they are. The guardians, walkers, base guardians and shrines stand there
+as the game's own models, in their team's colours and facing the way the game places them, with their markers over
+their heads, the patrons as the Hidden King and the Archmother themselves, and the bridge power-ups as the crystal the
+game shows; a shrine or patron the frames no longer have (destroyed) is gone. Zoomed out they're drawn up to 2.5 times
+their size so they read among buildings ten times their height (zoomed in, true to size); the patrons, already as tall
+as the buildings round them, keep their own. What the city hides of them (base guardians, shrines and patrons stand
+in halls and covered courts, the others in streets between towers) shows through faintly. **Underground and indoors**:
 heroes spend about a fifth of their time where no camera sees them, in the Mid-Boss's hall under the plaza, the
 tunnels round it, the bases' covered courts and big halls. While a hero stands in one of these interiors, the view cuts
 away whatever lies between the camera and the floor around the hero (the street or roof over it, the near walls, the
@@ -281,21 +284,27 @@ times its tint. `--quality high` writes the High quality setting's model (`dl_mi
 clustering grid instead of 64: about twice the triangles, since the collision world has little finer detail. Run the
 script again (both ways) when a patch changes the map. The geometry and colours are Valve's, like the music below.
 
-The models standing on the 3D map (`frontend/public/maps/objects.bin.gz`, 0.2 MB, loaded with the map; drawn by
+The models standing on the 3D map (`frontend/public/maps/objects.bin.gz`, 0.4 MB, loaded with the map; drawn by
 `mapObjectRenderer.ts`) come from the same install by `python frontend/scripts/map_objects.py`: the guardian's and the
 walker's model and scale as `scripts/npc_units.vdata` names them, each team's base guardian (a different statue per
-team), and the bridge power-up's crystal as its particle effect draws it (half size, 70 units above its spawner). The
-script decodes the meshes (meshoptimizer-coded vertex and index buffers, sometimes zstd-packed), colours each triangle
-from its material's colour texture (BC1 and BC7, through Pillow) and makes its self-illuminated parts glow (the
-walker's sun band, the candles, the watchers' eyes), then simplifies each model to about 4,000 to 6,000 triangles by
-vertex clustering, keeping the colours. Team skins are the material groups the game names for each team ("Amber",
-"Sapphire"); the walker has none, so the Archmother's takes its "friendly" skin, a blue glow. The file also lists where
-the map places each guardian, walker, base guardian, patron and power-up spawner (with the way it faces), from the
-map's entities: the view matches frame objectives to these for their facing, and for their height when a frame has
-none. The script also reads the bridge power-ups' kinds (the four `scripts/misc.vdata`'s spawner picks from), each
-one's colour, what it gives, its English name (the game's localization) and its minimap icon (a compiled SVG in
-`panorama/images/minimap`), and writes them to `frontend/src/lib/powerupIcons.ts` for the markers; the crystal gets a
-skin in each kind's colour. Run it again when a patch changes these models or power-ups.
+team), each team's shrine (the Hidden King's a tower, the Archmother's a book on a pedestal, at the three-quarter size
+the map's entities give them), each team's patron (the unit the map names for the team: the Hidden King at full size,
+the Archmother at 0.8, her first phase's), and the bridge power-up's crystal as its particle effect draws it (half
+size, 70 units above its spawner). The script decodes the meshes (meshoptimizer-coded vertex and index buffers,
+sometimes zstd-packed), colours each triangle from its material's colour texture (BC1 and BC7, through Pillow) and
+makes its self-illuminated parts glow (the walker's sun band, the candles, the watchers' eyes), leaves out what the
+game draws as light rather than as a surface (additive glows, the beams from the Hidden King's eyes and over the
+Archmother's book), then simplifies each model to about 4,000 to 6,000 triangles by vertex clustering (8,000 for the
+patrons, about 1,800 world units tall), keeping the colours. Team skins are the material groups the game names for
+each team ("Amber", "Sapphire"); the walker has none, so the Archmother's takes its "friendly" skin, a blue glow. The
+file also lists where the map places each guardian, walker, base guardian, shrine, patron and power-up spawner (with
+the way it faces), from the map's entities: the view matches frame objectives to these for their facing, and for
+their height when a frame has none. The script also reads the bridge power-ups' kinds (the four `scripts/misc.vdata`'s
+spawner picks from), each one's colour, what it gives, its English name (the game's localization) and its minimap icon
+(a compiled SVG in `panorama/images/minimap`), and writes them to `frontend/src/lib/powerupIcons.ts` for the markers;
+the crystal gets a skin in each kind's colour. It also cuts the shrines' marker icon
+(`frontend/public/icons/objectives/shrine.webp`) from the game's own picture of a shrine (`panorama/images/npcs`, from
+when shrines were "shield generators"). Run it again when a patch changes these models, the shrines or the power-ups.
 
 Heights: frames carry z for every hero, objective, camp, Sinner's Sacrifice, power-up, the urn and its pad, the rift
 and the Mid-Boss's spot (the bot reads it on the same 512-unit cells as x and y; camps from their timers), scaled like
@@ -310,8 +319,9 @@ the model seen along the sunlight, its depths packed into four bytes a texel, co
 soft edges.
 
 Item and objective icons are the game's current art from the [Deadlock Wiki](https://deadlock.wiki), stored as small
-WebP files in `frontend/public/icons/`. Refresh them after a patch with `python frontend/scripts/wiki_icons.py` (needs
-Pillow; `--objectives` refreshes only the map objectives' icons). Items the wiki has no icon for keep deadlock-api's.
+WebP files in `frontend/public/icons/` (the shrines' is cut from the game's files by `map_objects.py`, above). Refresh
+them after a patch with `python frontend/scripts/wiki_icons.py` (needs Pillow; `--objectives` refreshes only the map
+objectives' icons). Items the wiki has no icon for keep deadlock-api's.
 Every item the shop sells has the wiki's icon and the same name as the wiki's item data (`Data:ItemData.json`, keyed
 by the game's class names, as deadlock-api's items are), checked for all of them and for every item the bot reported
 in nine live matches. deadlock-api's list also holds about 80 items no hero in a normal match can have: removed ones
@@ -608,12 +618,14 @@ What the realtime map's tests prove (CI runs them all: `frontend`, `frontend-bro
   the model. With 1,120 real heroes' positions from live broadcasts (`e2e/fixtures/heroes.json`): heroes in the
   Mid-Boss hall all stand in one interior, the hall; most heroes on floors no camera sees open an interior, hardly any
   on floors cameras see do; each opening is its own interior's floor round the hero. Every objective the game places
-  has its spawn (for frames without heights) and every power-up kind its crystal skin.
+  has its spawn (for frames without heights), each team's shrine and patron its own model at the game's size, and
+  every power-up kind its crystal skin.
 * **In a real browser** (`e2e/renderers.spec.ts`, `e2e/live-map.spec.ts`): every shader builds; in a made-up scene an
   interior opens to show its floor inside a rim and closes again, with and without shadows; in the real map (both
   qualities) heroes in the Mid-Boss hall, tunnels and halls open theirs while the rest of the view stays as it was; the
-  objects and the 2.5D terrain draw. On the live match page (mock core, nothing fetched from outside): the 2D map has
-  every hero and both power-ups with their kinds; in Builds, every hero has its own four abilities and different items
+  objects (both teams' shrines and patrons among them) and the 2.5D terrain draw. On the live match page (mock core,
+  nothing fetched from outside): the 2D map has every hero, both teams' shrines and patrons, and both power-ups with
+  their kinds; in Builds, every hero has its own four abilities and different items
   the shop sells, with the wiki's icons; the match starts at 15:00 for whoever comes to watch; the 3D view loads and draws the map, with every hero, and heroes in
   interiors open them; following a hero in the hall zooms in and keeps it in the middle; High quality loads the
   detailed map; the 2.5D view raises buildings and lays them flat; scrolling zooms, double-click goes back to the whole
@@ -623,6 +635,9 @@ What the realtime map's tests prove (CI runs them all: `frontend`, `frontend-bro
   step or a drop are one interior, storeys and rooms apart aren't; holes round pillars and gaps between polygons are
   filled at the floor's height, courtyards and the floor's surroundings aren't; an interior keeps its floor and walls
   but not its cover; a floor under a roof is hidden from every camera; simplifying keeps buildings' corners sharp.
+* **The objects builder** (`scripts/tests/test_map_objects.py`): where the map places each shrine and patron, which
+  model each team's stands as and at what scale, and which materials it leaves out as light (the Archmother's
+  translucent robes stay).
 
 ## Where each design document lives in the code
 

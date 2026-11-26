@@ -38,7 +38,7 @@ import { InteriorIndex, sameOpenings, type Footing, type Opening } from '../lib/
 import { MODEL_URL, MODEL_URL_HIGH, groundHeight, inArena, loadModel, mapHeight, standHeight, type MapModel } from '../lib/mapModel';
 import { ModelRenderer } from '../lib/mapModelRenderer';
 import { ObjectRenderer, type ObjectDraw } from '../lib/mapObjectRenderer';
-import { heightOf, loadObjects, objectiveKey, placements, powerupKey, type MapObjects } from '../lib/mapObjects';
+import { grownBy, heightOf, loadObjects, objectiveKey, placements, powerupKey, type MapObjects } from '../lib/mapObjects';
 import { TerrainRenderer, webgl, type Rgb, type TerrainColors } from '../lib/mapRenderer';
 import { BUILDING_HEIGHT, loadTerrain, type Terrain } from '../lib/mapTerrain';
 import { CampMarker, MapScale, MidbossTimer, PowerupMarker } from './liveMapLayers';
@@ -67,6 +67,7 @@ const OBJECTIVE_LIFT: Record<FrameObjective['kind'], number> = {
   patron_core: 46,
   walker: 50,
   guardian: 36,
+  shrine: 34,
   base_guardian: 30,
   midboss: 28,
 };
@@ -75,9 +76,9 @@ const MODEL_LIFT = 8;
 /** Half the height of the power-up's marker, in marker units (see PowerupGlyph). */
 const POWERUP_HALF = 13;
 /**
- * The models standing on the 3D map (guardians, walkers, base guardians, power-ups) are this many times their size
- * with the whole map in view, so they read among buildings ten times their height; zoomed in, they shrink towards their
- * true size the way markers do.
+ * The models standing on the 3D map (guardians, walkers, base guardians, shrines, power-ups) are this many times their
+ * size with the whole map in view, so they read among buildings ten times their height; zoomed in, they shrink towards
+ * their true size the way markers do. The patrons, as tall as the buildings already, keep theirs (see grownBy).
  */
 const MODEL_GROW = 2.5;
 /** Team light on the ground around objectives, in map units. */
@@ -315,7 +316,7 @@ export function LiveMap25D(props: {
     return g[Math.floor(g.length / 2)] ?? 0;
   });
 
-  // ---- the game's models of the guardians, walkers, base guardians and bridge power-ups, standing on the 3D map ----
+  // ---- the game's models of the objectives (guardians to patrons) and bridge power-ups, standing on the 3D map ----
   const [objects, setObjects] = createSignal<MapObjects | null>(null);
   createEffect(() => {
     if (props.scene !== 'model' || objects()) return;
@@ -362,7 +363,7 @@ export function LiveMap25D(props: {
     const d = standingByKey().get(key);
     const p = proj();
     const m = shownModel();
-    return d && p && m ? p(d.x, d.y, d.h + mapHeight(m, d.model.height * grow())) : null;
+    return d && p && m ? p(d.x, d.y, d.h + mapHeight(m, d.model.height * grownBy(d.model, grow()))) : null;
   };
 
   /** A world position (x, y and height z as in frames) on the screen, standing where standAt says. */

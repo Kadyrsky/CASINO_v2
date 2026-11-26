@@ -7,7 +7,7 @@
  */
 import { MAP_SIZE } from './mapCamera';
 import { SUN } from './mapModelRenderer';
-import type { ObjectModel } from './mapObjects';
+import { grownBy, type ObjectModel } from './mapObjects';
 import { buildProgram } from './mapRenderer';
 
 /** How strongly what the city hides of a model shows through it. */
@@ -155,7 +155,8 @@ export class ObjectRenderer {
   /**
    * Draws the placed models through `matrix` (map space → clip space) into what is already on the canvas: first,
    * faintly, what the map hides of them, then what can be seen. `radius` is the map's (world units from its middle to
-   * its edge); `grow` makes the models that many times their size, about their feet.
+   * its edge); `grow` makes the models that many times their size, about their feet, though none taller than
+   * GROWN_HEIGHT (see grownBy).
    */
   draw(matrix: Float32Array, list: ObjectDraw[], radius: number, grow = 1) {
     const gl = this.gl;
@@ -187,7 +188,7 @@ export class ObjectRenderer {
     const pass = () => {
       for (const d of list) {
         const { buffer, count } = this.vertices(d.model, d.colours);
-        const m = placementMatrices(d, radius, grow);
+        const m = placementMatrices(d, radius, grownBy(d.model, grow));
         gl.uniformMatrix4fv(modelAt, false, m.model);
         gl.uniformMatrix3fv(turnAt, false, m.turn);
         gl.bindBuffer(gl.ARRAY_BUFFER, buffer);

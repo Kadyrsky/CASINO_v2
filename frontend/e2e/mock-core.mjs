@@ -163,7 +163,7 @@ function along(points, t) {
   return { x: 0, y: 0, z: 0, nx: 0, ny: 0 };
 }
 
-const MAX_HP = { guardian: 4500, walker: 9000, base_guardian: 5000, patron: 12000, midboss: 52000 };
+const MAX_HP = { guardian: 4500, walker: 9000, base_guardian: 5000, shrine: 5000, patron: 12000, midboss: 52000 };
 let oid = 1;
 const objectives = realObjectives.map((o) => {
   const max = MAX_HP[o.kind] ?? 5000;

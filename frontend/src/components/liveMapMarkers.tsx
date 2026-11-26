@@ -15,6 +15,7 @@ export const OBJECTIVE_SIZE: Record<FrameObjective['kind'], number> = {
   guardian: 12,
   walker: 16,
   base_guardian: 10,
+  shrine: 11,
   patron: 18,
   patron_core: 15,
   midboss: 15,

@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vite-plus/test';
 import type { LiveFrame } from '../api/types';
 import { placementMatrices, objectVertices } from './mapObjectRenderer';
-import { decodeObjects, heightOf, modelFor, nearestSpawn, objectiveKey, placements, powerupKey, type MapObjects } from './mapObjects';
+import {
+  GROWN_HEIGHT,
+  decodeObjects,
+  grownBy,
+  heightOf,
+  modelFor,
+  nearestSpawn,
+  objectiveKey,
+  placements,
+  powerupKey,
+  type MapObjects,
+} from './mapObjects';
 
 interface ModelSpec {
   name: string;
@@ -54,14 +65,17 @@ function file(models: ModelSpec[], spawns: SpawnSpec[]): ArrayBuffer {
   return new Uint8Array(bytes).buffer;
 }
 
-/** A one-triangle model standing up from its feet: 0 to 200 model units high (corners that quantize exactly). */
-const triangle = (name: string, skins: string[]): ModelSpec => ({
+/**
+ * A one-triangle model standing up from its feet: 0 to `top` model units high (corners that quantize exactly), at
+ * `scale` world units per model unit.
+ */
+const triangle = (name: string, skins: string[], top = 200, scale = 0.5): ModelSpec => ({
   name,
-  scale: 0.5,
+  scale,
   vertices: [
     [-50, 0, 0],
     [50, 0, 0],
-    [-50, 0, 200],
+    [-50, 0, top],
   ],
   triangles: [[0, 1, 2]],
   skins: skins.map((s, i) => [s, [[200 + i, 100, 50, i * 255]]]),
@@ -72,7 +86,10 @@ const SPAWNS: SpawnSpec[] = [
   ['guardian', 1, -7040, 1984, 248, 270],
   ['walker', 0, -1288, -3472, 376, 30],
   ['base_guardian', 1, 1064, 5454, 640, 315],
+  ['shrine', 0, 299, -7535, 980, 175],
+  ['shrine', 1, -256, 7536, 1000, 20],
   ['patron', 0, -1280, -8034, 632, 90],
+  ['patron', 1, 1280, 8048, 632, 270],
   ['powerup', 255, -3936, 136, 912, 0],
   ['mystery', 0, 0, 0, 0, 0], // a kind this site doesn't know: left out
 ];
@@ -85,6 +102,11 @@ const objects = (): MapObjects =>
         triangle('walker', ['0', '1']),
         triangle('base_guardian_0', ['0']),
         triangle('base_guardian_1', ['0']),
+        triangle('shrine_0', ['0'], 400, 1),
+        triangle('shrine_1', ['0'], 400, 1),
+        // As tall as the game's patrons (about 1,800 world units), past GROWN_HEIGHT already.
+        triangle('patron_0', ['0'], 1800, 1),
+        triangle('patron_1', ['0'], 2000, 0.8),
         triangle('powerup', ['0', 'gun', 'casting']),
       ],
       SPAWNS,
@@ -94,15 +116,27 @@ const objects = (): MapObjects =>
 describe('decodeObjects', () => {
   it('reads the models, their skins and the spawns', () => {
     const o = objects();
-    expect([...o.models.keys()]).toEqual(['guardian', 'walker', 'base_guardian_0', 'base_guardian_1', 'powerup']);
+    expect([...o.models.keys()]).toEqual([
+      'guardian',
+      'walker',
+      'base_guardian_0',
+      'base_guardian_1',
+      'shrine_0',
+      'shrine_1',
+      'patron_0',
+      'patron_1',
+      'powerup',
+    ]);
     const g = o.models.get('guardian')!;
     expect(g.scale).toBe(0.5);
     expect(Array.from(g.positions)).toEqual([-50, 0, 0, 50, 0, 0, -50, 0, 200]);
     expect(Array.from(g.indices)).toEqual([0, 1, 2]);
     expect(g.height).toBe(100); // 200 model units at half size
     expect(Array.from(g.skins.get('1')!)).toEqual([201, 100, 50, 255]); // colour, then glow
-    expect(o.spawns).toHaveLength(6);
+    expect(o.models.get('patron_1')!.height).toBeCloseTo(1600, 3); // 2000 model units at 0.8
+    expect(o.spawns).toHaveLength(9);
     expect(o.spawns[0]).toEqual({ kind: 'guardian', team: 0, x: -8192, y: -1856, z: 248, yaw: 90 });
+    expect(o.spawns.filter((s) => s.kind === 'shrine').map((s) => s.team)).toEqual([0, 1]);
     expect(o.spawns.find((s) => s.kind === 'powerup')!.team).toBeNull();
   });
 
@@ -127,6 +161,15 @@ describe('models and spawns', () => {
     expect(modelFor(o, 'powerup', null)!.colours).toBe(o.models.get('powerup')!.skins.get('0'));
   });
 
+  it('gives each team its own shrine and patron (the Hidden King, the Archmother)', () => {
+    const o = objects();
+    for (const team of [0, 1] as const) {
+      expect(modelFor(o, 'shrine', team)!.model.name).toBe(`shrine_${team}`);
+      expect(modelFor(o, 'patron', team)!.model.name).toBe(`patron_${team}`);
+      expect(modelFor(o, 'patron', team)!.colours).toBe(o.models.get(`patron_${team}`)!.skins.get('0'));
+    }
+  });
+
   it('finds the nearest spawn of a kind within reach', () => {
     const o = objects();
     expect(nearestSpawn(o, 'guardian', -8100, -1800)?.team).toBe(0);
@@ -140,6 +183,7 @@ describe('models and spawns', () => {
     expect(heightOf(o, 'guardian', -8192, -1856, 300)).toBe(300);
     expect(heightOf(o, 'guardian', -8192, -1856, null)).toBe(248);
     expect(heightOf(o, 'patron', -1290, -8030, undefined)).toBe(632);
+    expect(heightOf(o, 'shrine', -256, 7536, null)).toBe(1000);
     expect(heightOf(o, 'powerup', -3930, 140, null)).toBe(912);
     expect(heightOf(o, 'midboss', 0, 0, null)).toBeNull();
     expect(heightOf(null, 'guardian', -8192, -1856, null)).toBeNull();
@@ -157,7 +201,7 @@ describe('placements', () => {
         [
           { id: 7, kind: 'guardian', team: 1, lane: 1, x: -7040, y: 1984, z: 250, hp: 1, max_hp: 1 },
           { id: 8, kind: 'base_guardian', team: 1, lane: 4, x: 1064, y: 5454, hp: 1, max_hp: 1 },
-          { id: 9, kind: 'patron', team: 0, lane: 3, x: -1280, y: -8034, z: 632, hp: 1, max_hp: 1 },
+          { id: 10, kind: 'midboss', team: null, lane: null, x: 0, y: 0, z: -832, hp: 1, max_hp: 1 }, // no model
         ],
         [{ x: -3936, y: 136 }],
       ),
@@ -168,6 +212,50 @@ describe('placements', () => {
     expect(list[1]).toMatchObject({ kind: 'base_guardian', z: 640, yaw: 315 }); // no height in the frame: the spawn's
     expect(list[1]!.model.name).toBe('base_guardian_1');
     expect(list[2]).toMatchObject({ kind: 'powerup', z: 912, yaw: 0 });
+  });
+
+  it("stands each team's shrines and patron as its own model, where and as high as the frame says", () => {
+    const o = objects();
+    const list = placements(
+      o,
+      frame(
+        [
+          // As a live broadcast has them (Nov 2026): shrines without a lane, the Archmother's patron at lane 0.
+          { id: 1841, kind: 'shrine', team: 1, lane: null, x: -256, y: 7536, z: 1000, hp: 5000, max_hp: 5000 },
+          { id: 1758, kind: 'patron', team: 1, lane: 0, x: 1280, y: 8048, z: 632, hp: 15250, max_hp: 15250 },
+          { id: 1690, kind: 'shrine', team: 0, lane: null, x: 299, y: -7535, hp: 2600, max_hp: 5000 }, // an older bot: no z
+          { id: 1759, kind: 'patron', team: 0, lane: 0, x: -1280, y: -8034, z: 632, hp: 9000, max_hp: 14250 },
+          // The core over a patron: no model of its own.
+          { id: 2390, kind: 'patron_core', team: null, lane: null, x: -1280, y: -8034, z: 982, hp: 1, max_hp: 1 },
+        ],
+        [],
+      ),
+    );
+    expect(list.map((p) => [p.key, p.model.name])).toEqual([
+      [objectiveKey(1841), 'shrine_1'],
+      [objectiveKey(1758), 'patron_1'],
+      [objectiveKey(1690), 'shrine_0'],
+      [objectiveKey(1759), 'patron_0'],
+    ]);
+    expect(list.map((p) => [p.kind, p.z, p.yaw])).toEqual([
+      ['shrine', 1000, 20],
+      ['patron', 632, 270],
+      ['shrine', 980, 175], // the spawn's height
+      ['patron', 632, 90],
+    ]);
+  });
+
+  it('stands a shrine or patron only while the frames have it: destroyed, it is gone', () => {
+    const o = objects();
+    const shrines: LiveFrame['objectives'] = [
+      { id: 1, kind: 'shrine', team: 0, lane: null, x: 299, y: -7535, z: 980, hp: 800, max_hp: 5000 },
+      { id: 2, kind: 'shrine', team: 0, lane: null, x: -2859, y: -7535, z: 980, hp: 5000, max_hp: 5000 },
+    ];
+    const patron: LiveFrame['objectives'][number] = { id: 3, kind: 'patron', team: 0, lane: 0, x: -1280, y: -8034, z: 632, hp: 100, max_hp: 14250 };
+    expect(placements(o, frame([...shrines, patron], [])).map((p) => p.key)).toEqual([objectiveKey(1), objectiveKey(2), objectiveKey(3)]);
+    // The first shrine fell, then the patron: the bot leaves what has no health out of its frames.
+    expect(placements(o, frame([shrines[1]!, patron], [])).map((p) => p.key)).toEqual([objectiveKey(2), objectiveKey(3)]);
+    expect(placements(o, frame([shrines[1]!], [])).map((p) => p.key)).toEqual([objectiveKey(2)]);
   });
 
   it("colours a power-up's crystal for its kind, untinted when the kind isn't known", () => {
@@ -182,6 +270,22 @@ describe('placements', () => {
     // Far from any walker's spawn, and no height in the frame.
     expect(placements(o, frame([{ id: 1, kind: 'walker', team: 0, lane: 1, x: 9000, y: 9000, hp: 1, max_hp: 1 }], []))).toEqual([]);
     expect(placements(o, undefined)).toEqual([]);
+  });
+});
+
+describe('grownBy', () => {
+  it('grows small models as asked, tall ones only up to GROWN_HEIGHT, and shrinks none for it', () => {
+    const o = objects();
+    const guardian = o.models.get('guardian')!; // 100 world units
+    const shrine = o.models.get('shrine_0')!; // 400
+    const patron = o.models.get('patron_0')!; // 1800: taller than GROWN_HEIGHT already
+    expect(grownBy(guardian, 2.5)).toBe(2.5);
+    expect(grownBy(shrine, 2.5)).toBe(2.5);
+    expect(grownBy(shrine, 6)).toBeCloseTo(GROWN_HEIGHT / 400);
+    expect(grownBy(patron, 2.5)).toBe(1);
+    expect(grownBy(o.models.get('patron_1')!, 2.5)).toBe(1);
+    // At their own size (zoomed in), all are as they are.
+    for (const m of [guardian, shrine, patron]) expect(grownBy(m, 1)).toBe(1);
   });
 });
 

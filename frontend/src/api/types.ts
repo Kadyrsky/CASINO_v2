@@ -401,7 +401,8 @@ export interface FrameSinner {
   max_hp: number;
 }
 
-export type ObjectiveKind = 'guardian' | 'walker' | 'base_guardian' | 'patron' | 'patron_core' | 'midboss';
+/** `shrine`: each team's two shrines in its base, which guard its patron (absent in frames from older bots). */
+export type ObjectiveKind = 'guardian' | 'walker' | 'base_guardian' | 'shrine' | 'patron' | 'patron_core' | 'midboss';
 
 export interface FrameObjective {
   id: number;

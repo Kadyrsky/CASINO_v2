@@ -64,6 +64,38 @@
   "z": 632.0
  },
  {
+  "kind": "shrine",
+  "team": 0,
+  "lane": null,
+  "x": 299,
+  "y": -7535,
+  "z": 980.0
+ },
+ {
+  "kind": "shrine",
+  "team": 0,
+  "lane": null,
+  "x": -2859,
+  "y": -7535,
+  "z": 980.0
+ },
+ {
+  "kind": "shrine",
+  "team": 1,
+  "lane": null,
+  "x": 2816,
+  "y": 7536,
+  "z": 1000.0
+ },
+ {
+  "kind": "shrine",
+  "team": 1,
+  "lane": null,
+  "x": -256,
+  "y": 7536,
+  "z": 1000.0
+ },
+ {
   "kind": "walker",
   "team": 1,
   "lane": 1,
