@@ -422,41 +422,61 @@ Germany, Hungary, Montenegro, Slovenia, Portugal, Belgium, Ireland, Bulgaria, Gr
 
 Every button, link and tab clicks, and the games have their own sounds: the slot reels spin and land one by one, wins
 chime (louder for big wins, rising with each win in a row), poker cards deal and chips clack, and a bell rings on your
-turn. A live bet settling plays a win or loss cue on whatever page you're on. There are three **sound packs**:
+turn. A live bet settling plays a win or loss cue on whatever page you're on. There are four **sound packs**:
 
 * **Deadlock**: brass and clockwork (a typewriter-key click, a clock tick, a ratchet for the reels), plus the game's
   own stingers for the big moments: "First Blood" on the first win of a visit, the rising **killstreak** stingers for
   wins in a row, "Urn Arrived" for free spins (the slot's scatter is the Soul Urn), "Rift Announced" for the rift bonus,
-  "Rift Secured" for a big win, "Victory" for the jackpot, and the Hidden King's or the Archmother's intro when you pick
-  their theme.
+  "Rift Secured" for a big win, "Victory" for the jackpot, and the title screen's soft swell into the hideout when you
+  pick a theme (the music only dips a little, so trying the themes one after another doesn't get tiring).
 * **Arcade**: bright square-wave chimes and coins, like a fruit machine.
 * **Soft**: quiet, rounded tones.
+* **Christmas**: sleigh bells (speeding up while the reels spin), a celesta, a handbell on your turn and glass baubles
+  for chips, with carols for the wins: a bit of Jingle Bells for a win and all of it for the jackpot, We Wish You a
+  Merry Christmas for the first win of a visit and Deck the Halls for the rift bonus (all traditional).
 
 The effects are synthesized in the browser with the Web Audio API (`frontend/src/lib/soundPacks.ts`), so they need no
 files and play without delay. **Music** is Deadlock's soundtrack from the [Deadlock Wiki](https://deadlock.wiki/Music),
-in stations: **Lounge** (the Baroness Hotel's records, the Curiosity Shop, the Greenhouse Waltz, Rem's record),
-**Hideout** (the trip-hop title theme), **Gothic** (the original, darker score) and **Rift Fight** (battle loops; can be
-picked, isn't given at random). Tracks cross-fade, short loops repeat, and the music ducks under stingers. Every
-track is evened out to the same loudness (the wiki's files differ by up to 25 dB), and every pack plays each event at
-the same level (`LEVELS` in `soundPacks.ts`), so in the taste test nothing wins just by being louder.
+in ten **music packs**, grouped the way the wiki groups them (`frontend/src/lib/musicPacks.ts`):
+
+| Pack | Versions |
+|---|---|
+| Deadlock | the Title Screen |
+| Hideout | the main hideout loop: Base, Low Tempo, High Tempo |
+| Matchmaking Search | Wait (the search loop), Retired (the old "Connecting to Match") |
+| The Baroness Hotel | Near, Far |
+| The Curiosity Shop | Standard, Alternate |
+| Seasonal | the winter event's Main menu, Standard shop and Secret shop |
+| Ambient Waltz, Ambient Choir | one track each |
+| Teleporter | the unused teleporter music: Music 01, Comp, Melody |
+| Paying the Price | a loop edit of the wiki's WAV: cut at exactly 49 s, with 49.00–49.70 s added onto its first 0.70 s, so it loops without a seam |
+
+The player (`frontend/src/lib/musicPlayer.ts`) loops tracks of up to 75 s in Web Audio at the exact end of their
+audio, so the loops have no gap; longer tracks stream. Switching cross-fades, and however fast you switch, at most two
+tracks sound: the new one and the one fading out (a switch that has been overtaken never starts). The music ducks
+under stingers. Every track is evened out to the same loudness (the wiki's files differ by up to 25 dB), and every pack
+plays each event at the same level (`LEVELS` in `soundPacks.ts`), so in the taste test nothing wins just by being
+louder.
 
 * **Controls:** the speaker button in the header (or the **M** key) mutes everything; *Customize > Sound* has the
-  station, the pack (tap one to hear it), and on/off and volume for each. Settings are kept in the browser.
+  music pack and its version, the sound pack (tap one to hear it), and on/off and volume for each. Settings are kept
+  in the browser.
 * **Defaults:** music on at 50%, effects at 70% (`AUDIO_DEFAULTS` in `frontend/src/lib/audio.ts`). Browsers only allow
   sound after the first click or key press, so nothing plays before that. Music pauses while the tab is hidden.
 * **Silencing a button:** add `data-sound="none"` (or an event name, like `data-sound="bet"`) to it or a container.
-* **The music is in the repository** (`frontend/public/music`, 36 files, ~37 MB) and built into the core image, so
-  every checkout, build and server has it with nothing to download. `frontend/scripts/wiki_music.py` (standard
-  library only) fetched it from the Deadlock Wiki; run it again only to add or refresh tracks. `/music/manifest.json`
-  lists what a server has, and the site only offers that. The audio is Valve's: fine in this private repository for a
-  class project, but take it out of git before the repository is ever made public.
+* **The music is in the repository** (`frontend/public/music`, 40 files, ~52 MB) and built into the core image, so
+  every checkout, build and server has it with nothing to download. `frontend/scripts/wiki_music.py` fetched it from
+  the Deadlock Wiki (standard library, plus ffmpeg for the two tracks it makes: Paying the Price, and the matchmaking
+  wait loop, an Ogg that Safari can't play); run it again only to add or refresh tracks. `/music/manifest.json` lists
+  what a server has, with each track's exact length, and the site only offers that. The audio is Valve's: fine in
+  this private repository for a class project, but take it out of git before the repository is ever made public.
 
 ### No music?
 
-*Customize > Sound* says "This server has no music files yet", or `/music/manifest.json` lists fewer than 36 files:
+*Customize > Sound* says "This server has no music files yet", or `/music/manifest.json` lists fewer than 40 files:
 
 1. **Rebuild the image.** `docker compose up` alone keeps running the old image: `docker compose up --build -d`.
-   The build prints `wiki_music: 36/36 files`.
+   The build prints `wiki_music: 40/40 files`.
 2. **Check the files are there**: `git status frontend/public/music` (restore them with
    `git checkout -- frontend/public/music`). If any are missing, the build tries the wiki and, if that fails too,
    stops and says what to do. `NAEBKA_MUSIC=skip` in `.env` builds with what's there without asking the wiki.
@@ -470,10 +490,11 @@ three kinds of evidence; the reasoning, the numbers and a **test-day checklist**
 [docs/ab-testing.md](docs/ab-testing.md).
 
 1. **Taste test** (the main evidence): a small card asks "which do you like more?" with two versions side by side,
-   one question each for the theme, the music, the sound effects and the slot symbols. People try both (the page
-   switches to it, or they listen), pick one and keep it, so answering is its own reward; about half a minute. Pairs
-   and sides are random, both versions must be tried before picking, and every answer is sent at once. A first-visit
-   card invites people after a few seconds of use; it is also under *Customize* and in the footer ("Pick your style").
+   one question each for the theme, the music, the sound effects and the slot symbols, plus, right after the music,
+   which version of the pack just picked (for the six packs that have several). People try both (the page switches to
+   it, or they listen), pick one and keep it, so answering is its own reward; about half a minute. Pairs and sides are
+   random, both versions must be tried before picking, and every answer is sent at once. A first-visit card invites
+   people after a few seconds of use; it is also under *Customize* and in the footer ("Pick your style").
 2. **Random assignment** (supporting): every visitor still gets one version of each experiment at random and can
    switch under *Customize*. Each experiment is judged on one number chosen in advance, e.g. how many people turned the
    music off.
@@ -484,9 +505,10 @@ three kinds of evidence; the reasoning, the numbers and a **test-day checklist**
 
 | Experiment | Versions (first = control) | Primary metric | Taste test |
 |---|---|---|---|
-| `theme` | Hidden King (amber), Archmother (sapphire), Deadlock (sewer green); Classic (the old gold look) can be picked but isn't given at random | changed by hand (lower is better) | yes |
-| `music` | Lounge, Hideout, Gothic; Rift Fight can be picked | turned the music off | yes |
-| `sfx_pack` | Deadlock, Arcade, Soft | turned the sounds off | yes |
+| `theme` | Hidden King (amber), Archmother (sapphire), Deadlock (sewer green), Christmas (holly red on pine green, with snow) | changed by hand (lower is better) | yes |
+| `music_pack` | the ten music packs above, Deadlock first | turned the music off | yes |
+| `music_hideout`, `music_matchmaking`, `music_hotel`, `music_curio`, `music_seasonal`, `music_teleporter` | each pack's versions, as above | turned the music off | yes, after the music question |
+| `sfx_pack` | Deadlock, Arcade, Soft, Christmas | turned the sounds off | yes |
 | `slot_icons` | Deadlock items, Classic fruit | changed by hand | yes |
 | `join_cta` | "Join", "Get 1,000 free NTK" (not switchable) | registered (higher is better) | no |
 
@@ -496,25 +518,35 @@ three kinds of evidence; the reasoning, the numbers and a **test-day checklist**
   visitors* (by the version people were first given, with each version's chance of being best on the primary metric)
   and *Feedback* (with the most common reasons). Each card exports CSV. The statistics are in
   `frontend/src/lib/stats.ts` (unit-tested).
+- **Changing a running test:** a version added to an experiment that already has visitors (Christmas, in `theme` and
+  `sfx_pack`) is only given to visitors who come after it: everyone from before keeps the version they had, so their
+  numbers stay right (`frontend/src/lib/abAssign.ts`). A logged-in player gets the versions their account was given on
+  any device. Classic was taken out of `theme`: anyone on it is back on the version they were given, and the dashboard
+  shows its old numbers as *removed*. The first music test, four stations (`music`), has ended; its results stay on
+  the dashboard, marked *ended*.
 - **Where:** experiments, their primary metrics and taste-test questions are defined in
-  `frontend/src/lib/experiments.ts` (with how to add one). The core (`core/.../ab/AbController.java`, migrations
-  `V8__experiments.sql` and `V9__taste_test.sql`) stores what visitors were given and are on now, their switches (by
-  hand or from the taste test), their goals (registered, bet placed, spun slots, sat at poker, music off, sounds off),
-  their taste-test answers and their feedback. The public endpoints are rate-limited per visitor, with a looser limit
-  per address, so a classroom on one network isn't throttled as one person.
+  `frontend/src/lib/experimentRegistry.ts`, and `experiments.ts` gives visitors their versions (with how to add an
+  experiment or a version). The core (`core/.../ab/AbController.java`, migrations `V8__experiments.sql` and
+  `V9__taste_test.sql`) stores what visitors were given and are on now, their switches (by hand or from the taste
+  test), their goals (registered, bet placed, spun slots, sat at poker, music off, sounds off), their taste-test
+  answers and their feedback. The public endpoints are rate-limited per visitor, with a looser limit per address, so a
+  classroom on one network isn't throttled as one person.
 - **Feedback file:** every rating, reason and comment is also appended to `data/feedback.jsonl` on the machine running
   Naebka (one JSON object per line; `/opt/naebka/data` on the server, see [deploy/README.md](deploy/README.md)). It is
   a second copy for safety and for reading without the dashboard; the database stays the main one. Set by
   `NAEBKA_FEEDBACK_FILE` in both Compose files; empty turns it off.
-- **Testing a version:** open the site with `?ab=theme:archmother,music:gothic` to force versions in that tab (`?ab=`
-  clears it). Forced visits are not counted and get no prompts, so Lighthouse runs and QA don't skew the results:
-  `npx lighthouse "http://localhost:8080/?ab=theme:archmother" --view`.
-- **Deadlock style:** the three Deadlock themes share a calm slate base modelled on
-  [thedeadlockobservatory.com](https://thedeadlockobservatory.com/) (solid panels, soft text, one accent) and switch on
-  the Deadlock look: the theme's emblem (its Patron, or the game's eye-and-wheel icon from Steam) drifting slowly
-  across the background, sharper panels, condensed uppercase headings and buttons, and main buttons whose plate
-  ticks right → centre → left like the game's (1.5°, 0.4 s per step). Deadlock's UI fonts (Valve Pulp, Retail) are Valve's and can't be
-  shipped, so they're used only if installed on the visitor's computer; everyone else gets the bundled
+- **Testing a version:** open the site with `?ab=theme:christmas,music_pack:hideout,music_hideout:high` to force
+  versions in that tab (`?ab=` clears it). Forced visits are not counted and get no prompts, so Lighthouse runs and
+  QA don't skew the results: `npx lighthouse "http://localhost:8080/?ab=theme:archmother" --view`.
+- **Deadlock style:** every theme has a calm base modelled on
+  [thedeadlockobservatory.com](https://thedeadlockobservatory.com/) (solid panels, soft text, one accent; slate for
+  the three Deadlock themes, pine green for Christmas) and the Deadlock look: the theme's emblem (its Patron, the
+  game's eye-and-wheel icon from Steam, or a snowflake) drifting slowly across the background, sharper panels,
+  condensed uppercase headings and buttons, and main buttons whose plate ticks right → centre → left like the game's
+  (1.5°, 0.4 s per step). Christmas also has snow falling over the page (`frontend/src/components/Snowfall.tsx`: one
+  canvas that clicks go through, off for people who ask their system for reduced motion). Deadlock's UI fonts (Valve
+  Pulp, Retail) are Valve's and can't be shipped, so they're used only if installed on the visitor's computer;
+  everyone else gets the bundled
   [Big Shoulders Display](https://fonts.google.com/specimen/Big+Shoulders+Display) (OFL). With a licensed copy of a
   game font, add an `@font-face` named `Deadlock UI` in `frontend/src/styles.css` and it is used for everyone.
   Animations stop for people who ask their system for reduced motion.
@@ -569,7 +601,7 @@ docker run --rm -v "$PWD/frontend:/app" -w /app node:22-alpine sh -c "npm instal
 # (frontend/e2e/mock-core.mjs, a simulated match); its own node_modules, as Playwright's image is not Alpine
 docker run --rm --ipc=host -v "$PWD/frontend:/app" -v naebka-fe-nm-pw:/app/node_modules -w /app mcr.microsoft.com/playwright:v1.65.1-noble sh -c "npm ci && npx playwright test"
 
-# The 3D map's builder: 11 tests on made-up maps (Python 3.14, numpy, Pillow)
+# The 3D map's builder and the music import: 23 tests on made-up maps and tracks (Python 3.14, numpy, Pillow)
 cd frontend && python -m pytest scripts/tests
 
 # Steam bot: 38 unit tests (needs Rust and protoc, see deadlock-bot/README.md)
