@@ -31,7 +31,8 @@ The admin account (manual-review queue and integrity dashboard at `/admin`) come
 (`NAEBKA_ADMIN_USERNAME` / `NAEBKA_ADMIN_PASSWORD`). Copy it to `.env` to change values.
 
 **Production** (<https://poker.naebka.win>): every push to `main` is tested, built and deployed by GitHub Actions;
-see [deploy/README.md](deploy/README.md).
+see [deploy/README.md](deploy/README.md). Each push is a release whose version number (shown under the name in the
+header) goes up by what was merged: see [docs/versioning.md](docs/versioning.md).
 
 ## MetaMask + Sepolia deposits and withdrawals (web3)
 
@@ -570,9 +571,9 @@ cd live && python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"   # bin
 .venv/Scripts/python -m pytest && .venv/Scripts/python -m mypy naebka_live tests
 .venv/Scripts/python -m pytest --cov=naebka_live --cov-report=html   # coverage: live/htmlcov/index.html
 
-# Frontend (no local Node needed): types, lint, 95 unit tests (A/B statistics, play-money notice; the realtime map's
-# camera, playback, terrain, models, interiors, power-ups, items, and the map files it ships, with real heroes'
-# positions), build
+# Frontend (no local Node needed): types, lint, 99 unit tests (A/B statistics, play-money notice, version label; the
+# realtime map's camera, playback, terrain, models, interiors, power-ups, items, and the map files it ships, with real
+# heroes' positions), build
 docker run --rm -v "$PWD/frontend:/app" -w /app node:22-alpine sh -c "npm install && npx tsc --noEmit && npx vp lint src && npx vp test run && npm run build"
 
 # Realtime map in a real browser: 14 Playwright tests in Chromium (WebGL in software) against the mock core

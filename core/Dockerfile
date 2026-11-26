@@ -5,8 +5,11 @@ WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm install --no-audit --no-fund
 COPY frontend/ .
+# The version the header shows under the name (docs/versioning.md): CI passes the release it is making; a local build
+# says "dev" unless given one (--build-arg NAEBKA_VERSION=1.5.0). Declared after npm install, which stays cached.
+ARG NAEBKA_VERSION=dev
 # The music comes from the "music" stage below, so a local copy in public/ isn't built in a second time.
-RUN rm -rf public/music && npm run build
+RUN rm -rf public/music && VITE_NAEBKA_VERSION="$NAEBKA_VERSION" npm run build
 
 # Deadlock's music and stingers, committed in frontend/public/music (frontend/scripts/wiki_music.py downloaded them
 # from the Deadlock Wiki). The files there are used as they are; anything missing is fetched from the wiki, and if
