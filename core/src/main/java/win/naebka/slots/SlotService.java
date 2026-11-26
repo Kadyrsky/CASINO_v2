@@ -26,13 +26,12 @@ import win.naebka.wallet.LedgerSource;
 import win.naebka.wallet.ResponsibleGamingService;
 import win.naebka.wallet.TxType;
 import win.naebka.wallet.WalletService;
-import win.naebka.ws.WsHub;
 
 /**
  * Slot orchestration: per-player state machine (IDLE / FREE_SPINNING / BONUS_GAME), provably-fair seeds,
- * money through the ledger, jackpot pool. Every spin is one transaction — stake debit, round row, win credit
- * and jackpot contribution commit together or not at all, so a disconnect mid-spin never loses funds
- * (LLD: WebSocketDisconnectionException, slot engine).
+ * money through the ledger, the casino-wide jackpot ({@link JackpotService}). Every spin is one transaction — stake
+ * debit, round row, win credit and jackpot contribution or payout commit together or not at all, so a disconnect
+ * mid-spin never loses funds (LLD: WebSocketDisconnectionException, slot engine).
  */
 @Service
 public class SlotService {
@@ -44,24 +43,26 @@ public class SlotService {
     private final JdbcClient jdbc;
     private final WalletService wallets;
     private final ResponsibleGamingService rg;
-    private final WsHub ws;
+    private final JackpotService jackpots;
 
-    public SlotService(JdbcClient jdbc, WalletService wallets, ResponsibleGamingService rg, WsHub ws) {
+    public SlotService(JdbcClient jdbc, WalletService wallets, ResponsibleGamingService rg, JackpotService jackpots) {
         this.jdbc = jdbc;
         this.wallets = wallets;
         this.rg = rg;
-        this.ws = ws;
+        this.jackpots = jackpots;
     }
 
     public record LineView(int paylineId, String symbol, int count, BigDecimal win, int[] positions) {}
 
     public record BonusView(int boxes, List<Map<String, Object>> opened, int remainingPicks, BigDecimal totalWin) {}
 
+    /** {@code jackpot}: the casino-wide pool after this spin, if the spin changed it (a loss added to it, or a hit). */
     public record SpinResult(UUID spinId, String[][] grid, BigDecimal totalBet, BigDecimal totalWin,
                              List<LineView> winningLines, int scatterCount, int freeSpinsAwarded,
                              int freeSpinsRemaining, boolean isBonusGameTriggered, BigDecimal jackpotWin,
-                             SlotState nextState, String hmacHash, String serverSeedHash, String clientSeed, long nonce,
-                             BigDecimal balance, boolean freeSpin) {}
+                             JackpotService.JackpotChange jackpot, SlotState nextState, String hmacHash,
+                             String serverSeedHash, String clientSeed, long nonce, BigDecimal balance,
+                             boolean freeSpin) {}
 
     public record StateView(UUID gameId, SlotState state, int freeSpinsRemaining, BigDecimal freeSpinBetPerLine,
                             BonusView bonus, BigDecimal jackpot, Map<String, Object> fairness, SpinResult lastSpin) {}
@@ -120,18 +121,10 @@ public class SlotService {
         }
 
         SpinPayout payout = outcome.payout();
-        long jackpotWin = 0;
-        if (!free) {
-            jdbc.sql("""
-                    UPDATE jackpot_pools SET amount = amount + (? * contribution_bp) / 10000, updated_at = now()
-                    WHERE game_id = ?""").params(totalBet, gameId).update();
-        }
-        if (payout.jackpotHit()) {
-            jackpotWin = jdbc.sql("""
-                    UPDATE jackpot_pools p SET amount = p.seed_amount, updated_at = now()
-                    FROM jackpot_pools old WHERE p.game_id = old.game_id AND p.game_id = ?
-                    RETURNING old.amount""").param(gameId).query(Long.class).single();
-        }
+        // A hit takes the whole casino-wide pool now: the row stays locked until this spin commits, so nobody else
+        // can win the same pool.
+        JackpotService.Claim claim = payout.jackpotHit() ? jackpots.claim(gameId) : null;
+        long jackpotWin = claim == null ? 0 : claim.won().amount();
 
         int freeAfter = Math.max(0, session.freeSpinsRemaining() - (free ? 1 : 0)) + payout.freeSpinsAwarded();
         PickAndClickBonus bonus = null;
@@ -170,15 +163,18 @@ public class SlotService {
         if (payout.totalWin() > 0) {
             wallets.credit(walletId, payout.totalWin(), TxType.SLOT_WIN, LedgerSource.slotRound(roundId), "slot-win:" + roundId);
         }
-        if (jackpotWin > 0) {
+        if (jackpotWin > 0) { // always, unless someone set the seed to 0 and the pool is empty
             wallets.credit(walletId, jackpotWin, TxType.JACKPOT_WIN, LedgerSource.slotRound(roundId), "jackpot:" + roundId);
-            ws.publish("lobby", "JACKPOT_WON", Map.of("amount", Money.toTokens(jackpotWin)));
-            log.info("Jackpot of {} won by {}", jackpotWin, userId);
+            jackpots.recordWin(claim, roundId, userId);
+            log.info("Jackpot {} of {} won by {}", claim.won().generation(), jackpotWin, userId);
         }
 
         saveSession(userId, gameId, next, freeAfter, freeAfter > 0 ? betPerLine : 0,
                 bonus == null ? null : bonusJson(bonus, totalBet), roundId);
-        return toResult(roundId, resultData, outcome.grid(), free ? 0 : totalBet, totalWin, freeAfter, next, seed,
+        // A losing spin adds its share last, so the casino-wide row is locked only for the end of this transaction.
+        JackpotService.JackpotChange pool = claim != null ? JackpotService.change(claim.next(), 0)
+                : jackpots.contribute(gameId, JackpotService.lossOf(payout, totalBet, free)).orElse(null);
+        return toResult(roundId, resultData, outcome.grid(), free ? 0 : totalBet, totalWin, pool, freeAfter, next, seed,
                 wallets.walletOf(userId).balance(), free);
     }
 
@@ -298,6 +294,11 @@ public class SlotService {
                 .query(Long.class).single());
     }
 
+    /** The casino-wide pool, its seed and rate, and its last win. */
+    public JackpotService.JackpotView jackpotView() {
+        return jackpots.view(defaultGameId());
+    }
+
     private Optional<SpinResult> roundAsSpin(UUID roundId, UUID userId) {
         return jdbc.sql("""
                 SELECT r.result_data::text, r.bet_amount, r.win_amount FROM slot_rounds r
@@ -312,7 +313,7 @@ public class SlotService {
                     return new SpinResult(roundId, grid, Money.toTokens(rs.getLong(2)), Money.toTokens(rs.getLong(3)),
                             linesFrom(d, d.path("betPerLine").asLong()), d.path("scatterCount").asInt(),
                             d.path("freeSpinsAwarded").asInt(), 0, d.path("bonusTriggered").asBoolean(),
-                            Money.toTokens(d.path("jackpotWin").asLong()), null, d.path("hmacHash").asText(),
+                            Money.toTokens(d.path("jackpotWin").asLong()), null, null, d.path("hmacHash").asText(),
                             d.path("serverSeedHash").asText(), d.path("clientSeed").asText(), d.path("nonce").asLong(),
                             null, "free_spin".equals(d.path("type").asText()));
                 })
@@ -320,11 +321,12 @@ public class SlotService {
     }
 
     private SpinResult toResult(UUID roundId, Map<String, Object> data, Symbol[][] grid, long totalBet, long totalWin,
-                                int freeAfter, SlotState next, Seed seed, long balance, boolean free) {
+                                JackpotService.JackpotChange pool, int freeAfter, SlotState next, Seed seed, long balance,
+                                boolean free) {
         JsonNode d = Json.MAPPER.valueToTree(data);
         return new SpinResult(roundId, gridIds(grid), Money.toTokens(totalBet), Money.toTokens(totalWin),
                 linesFrom(d, d.path("betPerLine").asLong()), d.path("scatterCount").asInt(), d.path("freeSpinsAwarded").asInt(),
-                freeAfter, d.path("bonusTriggered").asBoolean(), Money.toTokens(d.path("jackpotWin").asLong()), next,
+                freeAfter, d.path("bonusTriggered").asBoolean(), Money.toTokens(d.path("jackpotWin").asLong()), pool, next,
                 d.path("hmacHash").asText(), seed.serverSeedHash(), seed.clientSeed(), seed.nonce(),
                 Money.toTokens(balance), free);
     }

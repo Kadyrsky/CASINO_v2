@@ -59,9 +59,10 @@ public class SlotController {
         return List.of(game);
     }
 
+    /** The casino-wide jackpot, public; it then moves on the WebSocket topic "jackpot" (JackpotFeed). */
     @GetMapping("/api/slots/jackpot")
-    public Map<String, Object> jackpot() {
-        return Map.of("amount", slots.jackpot());
+    public JackpotService.JackpotView jackpot() {
+        return slots.jackpotView();
     }
 
     @GetMapping("/api/slots/state")

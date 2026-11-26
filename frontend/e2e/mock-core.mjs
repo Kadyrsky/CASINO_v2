@@ -2,7 +2,8 @@
 // endpoints and a WebSocket hub that streams a simulated match (match 424242, LIVE_FRAME twice a second). No
 // dependencies: `node e2e/mock-core.mjs` (from frontend/; MOCK_PORT, default 8081, is where `vp dev` proxies /api and
 // /ws to unless CORE_URL says otherwise). The browser tests (playwright.config.ts) start it on their own port.
-import { createHash } from 'node:crypto';
+// It also runs the slots' casino-wide jackpot (see "slots" below): log in with any name and password to spin.
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { gunzipSync } from 'node:zlib';
@@ -306,6 +307,133 @@ function frame() {
   };
 }
 
+// ---------------------------------------------------------------- slots and the casino-wide jackpot
+// Enough of Soul Reels to see the jackpot work (docs/jackpot.md). Other players lose all the time, so the pool ticks
+// up every second or so; someone else hits it every MOCK_JACKPOT_HIT_EVERY seconds (default 180, the first after 45 s;
+// 0: never), or at once with POST /api/mock/jackpot/hit. Anyone can log in, with any name and password, and spin:
+// spins lose (every third pays a little back, less than it cost), except at 10.00 a line, which always hits the
+// jackpot.
+const GAME_ID = '5e1f0000-0000-4000-8000-00000000c0de';
+const JACKPOT_SEED = 5000;
+const CONTRIBUTION_PERCENT = 2;
+const cents = (n) => Math.round(n * 100) / 100;
+const mask = (name) => (name.length < 3 ? `${name[0] ?? 's'}***` : `${name[0]}***${name.at(-1)}`);
+const jackpot = {
+  amount: 5432.1,
+  generation: 7,
+  lastWin: { amount: 18_342.5, generation: 6, winner: 'r***k', at: new Date(Date.now() - 3 * 86_400_000).toISOString() },
+};
+/** One push function per socket subscribed to "jackpot". */
+const jackpotWatchers = new Set();
+function publishJackpot(type, extra = {}) {
+  const data = { gameId: GAME_ID, amount: cents(jackpot.amount), generation: jackpot.generation, ...extra };
+  for (const push of jackpotWatchers) push({ topic: 'jackpot', ts: new Date().toISOString(), type, data });
+}
+function hitJackpot(winner) {
+  jackpot.lastWin = { amount: cents(jackpot.amount), generation: jackpot.generation, winner, at: new Date().toISOString() };
+  jackpot.generation++;
+  jackpot.amount = JACKPOT_SEED;
+  publishJackpot('JACKPOT_WON', { lastWin: jackpot.lastWin });
+  return jackpot.lastWin.amount;
+}
+const OTHERS = ['b***x', 'n***l', 'c***r', 'l***n', 's***l'];
+(function othersLose() {
+  jackpot.amount = cents(jackpot.amount + Math.ceil(Math.random() * 15) / 100);
+  publishJackpot('JACKPOT');
+  setTimeout(othersLose, 600 + Math.random() * 1400);
+})();
+const HIT_EVERY_S = Number(process.env.MOCK_JACKPOT_HIT_EVERY ?? 180);
+if (HIT_EVERY_S > 0) {
+  setTimeout(function othersHit() {
+    hitJackpot(OTHERS[Math.floor(Math.random() * OTHERS.length)]);
+    setTimeout(othersHit, HIT_EVERY_S * 1000);
+  }, Math.min(45, HIT_EVERY_S) * 1000);
+}
+
+const pays = (three, four, five) => ({ 3: three, 4: four, 5: five });
+const SYMBOLS = {
+  CHERRY: { name: 'Extended Magazine', type: 'REGULAR', pays: pays(4, 10, 40) },
+  LEMON: { name: 'Extra Health', type: 'REGULAR', pays: pays(4, 10, 40) },
+  BELL: { name: 'Extra Spirit', type: 'REGULAR', pays: pays(8, 25, 80) },
+  CLOVER: { name: 'Guardian', type: 'REGULAR', pays: pays(10, 30, 100) },
+  GEM: { name: 'Walker', type: 'REGULAR', pays: pays(20, 75, 250) },
+  SEVEN: { name: 'Rejuvenator', type: 'REGULAR', pays: pays(40, 150, 600) },
+  WILD: { name: 'Hidden King', type: 'WILD', pays: pays(50, 250, 2000) },
+  MULT: { name: 'Archmother x2', type: 'MULTIPLIER', pays: {} },
+  SCATTER: { name: 'Soul Urn', type: 'SCATTER', pays: {} },
+  BONUS: { name: 'Unstable Rift', type: 'BONUS', pays: {} },
+};
+const LINES = [[1, 1, 1, 1, 1], [0, 0, 0, 0, 0], [2, 2, 2, 2, 2], [0, 1, 2, 1, 0], [2, 1, 0, 1, 2], [0, 0, 1, 2, 2], [2, 2, 1, 0, 0], [1, 0, 0, 0, 1], [1, 2, 2, 2, 1], [1, 0, 1, 2, 1]];
+const GAME = {
+  id: GAME_ID, name: 'Soul Reels', rows: 3, columns: 5, paylines: LINES, symbols: SYMBOLS, reels: [],
+  scatterPays: { 3: 2, 4: 10, 5: 50 }, freeSpinsPerTrigger: 10, minBetPerLine: 0.01, maxBetPerLine: 10,
+};
+const SERVER_SEED_HASH = createHash('sha256').update('mock server seed').digest('hex');
+const pick = (list) => list[Math.floor(Math.random() * list.length)];
+let user = null;
+let balance = 1000;
+let spins = 0;
+const rounds = [];
+
+function login(body) {
+  const username = String(body?.username || 'player');
+  user = { id: 'a5e10000-0000-4000-8000-000000000001', username, email: `${username}@example.test`, role: 'PLAYER', country: 'CZ', dateOfBirth: '1990-01-01', createdAt: new Date().toISOString() };
+  return { token: 'mock-token', expiresAt: new Date(Date.now() + 3_600_000).toISOString(), user };
+}
+
+/** A grid that pays nothing: the first two reels never share a symbol, and there are no wilds or specials. */
+function losingGrid() {
+  const first = ['CHERRY', 'LEMON', 'BELL'];
+  const second = ['CLOVER', 'GEM', 'SEVEN'];
+  return [0, 1, 2, 3, 4].map((c) => [0, 1, 2].map(() => pick(c === 0 ? first : c === 1 ? second : [...first, ...second])));
+}
+
+function spin(body) {
+  const betPerLine = Number(body?.betPerLine ?? 0.1);
+  const bet = cents(betPerLine * LINES.length);
+  const grid = losingGrid();
+  let winningLines = [];
+  let win = 0;
+  let jackpotWin = 0;
+  let added = 0;
+  spins++;
+  if (betPerLine >= 10) {
+    for (let c = 0; c < 5; c++) grid[c][1] = 'WILD';
+    winningLines = [{ paylineId: 1, symbol: 'WILD', count: 5, win: cents(2000 * betPerLine), positions: LINES[0] }];
+    jackpotWin = win = hitJackpot(mask(user?.username ?? 'player'));
+  } else {
+    if (spins % 3 === 0) {
+      // Three Extended Magazines on the middle line: 4x the line bet back, less than the spin cost.
+      grid[0] = [pick(['LEMON', 'BELL']), 'CHERRY', pick(['LEMON', 'BELL'])];
+      grid[1][1] = grid[2][1] = 'CHERRY';
+      grid[3][1] = 'GEM';
+      win = cents(4 * betPerLine);
+      winningLines = [{ paylineId: 1, symbol: 'CHERRY', count: 3, win, positions: LINES[0] }];
+    }
+    // 2% of what the spin lost goes into the pool, rounded up to a cent.
+    added = Math.ceil(Math.round((bet - win) * 100) * (CONTRIBUTION_PERCENT / 100) - 1e-9) / 100;
+    jackpot.amount = cents(jackpot.amount + added);
+    publishJackpot('JACKPOT');
+  }
+  balance = cents(balance - bet + win);
+  const round = { id: randomUUID(), type: 'spin', bet, win, createdAt: new Date().toISOString() };
+  rounds.unshift(round);
+  return {
+    spinId: round.id, grid, totalBet: bet, totalWin: win, winningLines, scatterCount: 0, freeSpinsAwarded: 0, freeSpinsRemaining: 0,
+    isBonusGameTriggered: false, jackpotWin, jackpot: { amount: cents(jackpot.amount), generation: jackpot.generation, added },
+    nextState: 'IDLE', hmacHash: randomUUID().replaceAll('-', ''), serverSeedHash: SERVER_SEED_HASH, clientSeed: 'mock', nonce: spins,
+    balance, freeSpin: false,
+  };
+}
+
+class Reply {
+  constructor(status, body) {
+    this.status = status;
+    this.body = body;
+  }
+}
+const needsLogin = (route) => (body, req) => (req.headers.authorization ? route(body, req) : new Reply(401, { code: 'UNAUTHORIZED', detail: 'Log in first' }));
+
 // ---------------------------------------------------------------- HTTP
 const summary = () => {
   const f = frame();
@@ -322,13 +450,39 @@ const routes = {
   'GET /api/live/assets': () => assets,
   'GET /api/live/directory': () => ({ updated_at: Date.now() / 1000, source: 'mock', total: 1, rank_spread: [], matches: [summary()], bettable: {} }),
   [`GET /api/live/matches/${MATCH_ID}`]: () => ({ match: summary(), bettableMatchId: null, watch: { allowed: true, reason: 'OPEN', minStakeTokens: 0, stakedTokens: 0 } }),
+  'POST /api/auth/login': login,
+  'POST /api/auth/register': login,
+  'POST /api/auth/refresh': needsLogin(() => login(user)),
+  'POST /api/auth/logout': () => undefined,
+  'GET /api/auth/me': needsLogin(() => user),
+  'GET /api/wallet': needsLogin(() => ({ walletId: 'a5e10000-0000-4000-8000-0000000000aa', currency: 'NTK', balance })),
+  'GET /api/slots/games': () => [GAME],
+  'GET /api/slots/jackpot': () => ({ amount: cents(jackpot.amount), generation: jackpot.generation, seed: JACKPOT_SEED, contributionPercent: CONTRIBUTION_PERCENT, lastWin: jackpot.lastWin }),
+  'GET /api/slots/state': needsLogin(() => ({
+    gameId: GAME_ID, state: 'IDLE', freeSpinsRemaining: 0, freeSpinBetPerLine: 0, bonus: null, jackpot: cents(jackpot.amount),
+    fairness: { serverSeedHash: SERVER_SEED_HASH, clientSeed: 'mock', nonce: spins }, lastSpin: null,
+  })),
+  'GET /api/slots/rounds': needsLogin(() => ({ items: rounds.slice(0, 8), nextCursor: null })),
+  'POST /api/slots/spin': needsLogin(spin),
+  'POST /api/mock/jackpot/hit': () => ({ won: hitJackpot(pick(OTHERS)) }),
 };
 const server = createServer((req, res) => {
   const path = req.url.split('?')[0];
   const route = routes[`${req.method} ${path}`];
   if (route) {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify(route()));
+    let raw = '';
+    req.on('data', (chunk) => (raw += chunk));
+    req.on('end', () => {
+      const out = route(raw ? JSON.parse(raw) : undefined, req);
+      if (out === undefined) {
+        res.writeHead(204);
+        return res.end();
+      }
+      const [status, body] = out instanceof Reply ? [out.status, out.body] : [200, out];
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body));
+    });
+    return;
   }
   if (req.method === 'POST' && path.startsWith('/api/ab/')) {
     res.writeHead(204);
@@ -353,6 +507,7 @@ server.on('upgrade', (req, socket) => {
   socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
   let seq = 1;
   const timers = new Map();
+  const pushJackpot = (msg) => send(socket, { ...msg, seq: seq++ });
   let buf = Buffer.alloc(0);
   socket.on('data', (chunk) => {
     buf = Buffer.concat([buf, chunk]);
@@ -377,6 +532,9 @@ server.on('upgrade', (req, socket) => {
         timers.set(msg.topic, setInterval(() => send(socket, { topic: msg.topic, seq: seq++, ts: new Date().toISOString(), type: 'LIVE_FRAME', data: frame() }), 500));
       } else if (msg.op === 'subscribe') {
         send(socket, { topic: msg.topic, seq: seq++, type: 'SUBSCRIBED' });
+        if (msg.topic === 'jackpot') jackpotWatchers.add(pushJackpot);
+      } else if (msg.op === 'unsubscribe' && msg.topic === 'jackpot') {
+        jackpotWatchers.delete(pushJackpot);
       } else if (msg.op === 'unsubscribe' && timers.has(msg.topic)) {
         clearInterval(timers.get(msg.topic));
         timers.delete(msg.topic);
@@ -385,6 +543,7 @@ server.on('upgrade', (req, socket) => {
     }
   });
   const stop = () => {
+    jackpotWatchers.delete(pushJackpot);
     for (const t of timers.values()) {
       clearInterval(t);
       unwatch();

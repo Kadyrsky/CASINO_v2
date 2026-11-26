@@ -38,7 +38,8 @@ export default defineConfig({
     {
       command: 'node e2e/mock-core.mjs',
       url: `http://localhost:${MOCK_PORT}/api/live/assets`,
-      env: { MOCK_PORT: String(MOCK_PORT) },
+      // Nobody hits the jackpot unless a test says so (jackpot.spec.ts).
+      env: { MOCK_PORT: String(MOCK_PORT), MOCK_JACKPOT_HIT_EVERY: '0' },
       reuseExistingServer: false,
     },
     {

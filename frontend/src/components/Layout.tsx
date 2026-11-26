@@ -12,6 +12,7 @@ import { appVersion } from '../lib/version';
 import { CustomizeButton } from './Appearance';
 import { Disclaimer } from './Disclaimer';
 import { FeedbackDock } from './Feedback';
+import { JackpotAlerts } from './JackpotAlerts';
 import { PulseCard } from './QuickRating';
 import { SoundButton } from './SoundControls';
 import { TasteTestDock } from './TasteTest';
@@ -202,6 +203,8 @@ export default function Layout(props: RouteSectionProps) {
         <PulseCard />
       </Show>
       <Toaster />
+      {/* Someone hit the casino-wide jackpot (not on the slots page, whose meter shows it). */}
+      <JackpotAlerts />
       <Disclaimer />
     </div>
   );

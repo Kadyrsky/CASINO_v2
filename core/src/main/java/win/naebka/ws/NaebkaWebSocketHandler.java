@@ -29,7 +29,8 @@ import win.naebka.common.Json;
  * Single WebSocket endpoint. Protocol (JSON text frames):
  * <ul>
  *   <li>{@code {op:"auth", token}} — authenticate; the JWT is never put in the URL.</li>
- *   <li>{@code {op:"subscribe", topic, lastSeq?}} — topics: lobby, match:{id}, poker:{id}, chat:{id}, user:{ownId}.</li>
+ *   <li>{@code {op:"subscribe", topic, lastSeq?}} — topics: lobby, jackpot, match:{id}, poker:{id}, chat:{id},
+ *       user:{ownId}.</li>
  *   <li>{@code {op:"unsubscribe", topic}}, {@code {op:"ping"}}</li>
  *   <li>Anything else is routed to a {@link WsCommandHandler} by op prefix (e.g. {@code poker.action}).</li>
  * </ul>
@@ -38,7 +39,7 @@ import win.naebka.common.Json;
 @Component
 public class NaebkaWebSocketHandler extends TextWebSocketHandler {
     private static final Logger log = LoggerFactory.getLogger(NaebkaWebSocketHandler.class);
-    private static final Pattern PUBLIC_TOPIC = Pattern.compile("lobby|(match|poker|chat):[0-9a-f-]{36}");
+    private static final Pattern PUBLIC_TOPIC = Pattern.compile("lobby|jackpot|(match|poker|chat):[0-9a-f-]{36}");
     private static final Pattern WATCH_TOPIC = Pattern.compile("watch:[0-9]{1,20}");
 
     private final Map<String, WsClient> clients = new ConcurrentHashMap<>();

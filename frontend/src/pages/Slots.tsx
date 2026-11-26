@@ -3,18 +3,23 @@ import { createInfiniteQuery, createQuery, useQueryClient } from '@tanstack/soli
 import { createMemo, createSignal, For, Index, onMount, Show } from 'solid-js';
 import { ApiError, get, post } from '../api/client';
 import type { BonusPick, Fairness, Page, SlotGame, SlotRound, SlotState, SpinResult } from '../api/types';
+import { AddedToJackpot, JackpotCelebration, JackpotMeter } from '../components/jackpot';
 import { toast } from '../components/toast';
 import { LINE_SYMBOLS, Paytable, SYMBOL_ART, SymbolIcon, symbolName } from '../components/slotArt';
 import { Badge, Button, Card, Empty, Modal, PageHeader } from '../components/ui';
 import { auth } from '../lib/auth';
 import { ab } from '../lib/experiments';
 import { ago, fiat, humanize, tokens } from '../lib/format';
+import { jackpot } from '../lib/jackpot';
+import type { SpinJackpot } from '../lib/jackpotMeter';
 import type { SoundEvent } from '../lib/soundPacks';
 import { sounds } from '../lib/sounds';
 import { wallet } from '../lib/wallet';
-import { useTopic } from '../lib/ws';
 
 const BET_STEPS = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10];
+
+/** What a losing spin added to the casino-wide jackpot (0 if it added nothing). */
+const addedToJackpot = (r: SpinResult) => (r as SpinResult & SpinJackpot).jackpot?.added ?? 0;
 
 /** Wins in a row (the Deadlock pack plays the rising killstreak stingers), kept while moving between pages. */
 let winStreak = 0;
@@ -69,7 +74,6 @@ export default function Slots() {
   onMount(() => ab.expose('slot_icons'));
   const game = createQuery(() => ({ queryKey: ['slot-game'], queryFn: async () => (await get<SlotGame[]>('/api/slots/games'))[0]! }));
   const state = createQuery(() => ({ queryKey: ['slot-state'], queryFn: () => get<SlotState>('/api/slots/state'), enabled: !!auth.user() }));
-  const jackpot = createQuery(() => ({ queryKey: ['jackpot'], queryFn: () => get<{ amount: number }>('/api/slots/jackpot'), refetchInterval: 15_000 }));
 
   const [betIdx, setBetIdx] = createSignal(3);
   const [spinning, setSpinning] = createSignal(false);
@@ -78,10 +82,6 @@ export default function Slots() {
   const [bonusBoard, setBonusBoard] = createSignal<Record<number, number>>({});
   const [revealed, setRevealed] = createSignal<number[] | null>(null);
   const [fairOpen, setFairOpen] = createSignal(false);
-
-  useTopic(() => 'lobby', (msg) => {
-    if (msg.type === 'JACKPOT_WON') void queryClient.invalidateQueries({ queryKey: ['jackpot'] });
-  });
 
   onMount(() => {
     const rnd = () => LINE_SYMBOLS[Math.floor(Math.random() * LINE_SYMBOLS.length)]!;
@@ -108,6 +108,9 @@ export default function Slots() {
     setSpinning(true);
     setResult(null);
     sounds.play('spin');
+    // Until the reels stop, the jackpot meter doesn't show a new pool: it might be this spin's own hit.
+    jackpot.spinStarted();
+    let landed: SpinResult | null = null;
     const started = Date.now();
     try {
       const free = slotState() === 'FREE_SPINNING';
@@ -117,25 +120,26 @@ export default function Slots() {
         : await post<SpinResult>('/api/slots/spin', { betPerLine: betPerLine() });
       await new Promise((ok) => setTimeout(ok, Math.max(0, 700 - (Date.now() - started))));
       setResult(r);
+      landed = r;
       // The reels land one after another (the 60 ms stagger of the tiles), then the result sounds.
       for (let reel = 0; reel < 5; reel++) sounds.play('reelStop', reel, { delay: reel * 0.06 });
       const [event, n] = outcomeSound(r, bet);
       sounds.play(event, n, { delay: 0.34 });
       wallet.set(r.balance);
       ab.track('slot_spin');
-      if (r.jackpotWin > 0) toast.success(`JACKPOT! ${tokens(r.jackpotWin)} NTK`);
-      else if (r.freeSpinsAwarded > 0) toast.success(`${r.freeSpinsAwarded} free spins!`);
+      // A jackpot gets its own celebration (JackpotCelebration).
+      if (r.freeSpinsAwarded > 0) toast.success(`${r.freeSpinsAwarded} free spins!`);
       else if (r.isBonusGameTriggered) toast.success('Rift bonus! Open 3 rifts.');
       setBonusBoard({});
       setRevealed(null);
       void queryClient.invalidateQueries({ queryKey: ['slot-state'] });
       void queryClient.invalidateQueries({ queryKey: ['slot-rounds'] });
-      void queryClient.invalidateQueries({ queryKey: ['jackpot'] });
     } catch (e) {
       if (e instanceof ApiError && e.code === 'GAME_STATE_MISMATCH') void queryClient.invalidateQueries({ queryKey: ['slot-state'] });
       toast.error(e);
     } finally {
       setSpinning(false);
+      jackpot.spinEnded(landed);
     }
   };
 
@@ -172,12 +176,7 @@ export default function Slots() {
             ? 'Classic slots: 5 reels · 10 lines · Joker wilds, Money Bag free spins and the gift bonus. Provably fair.'
             : 'Deadlock slots: 5 reels · 10 lines · Patron wilds, Soul Urn free spins and the rift bonus. Provably fair.'
         }
-        actions={
-          <div class="rounded-xl border border-gold-500/30 bg-gradient-to-r from-gold-500/15 to-transparent px-4 py-2">
-            <p class="text-[11px] font-bold uppercase tracking-widest text-gold-300">Progressive jackpot</p>
-            <p class="tabular text-2xl font-black text-gold-300">{tokens(jackpot.data?.amount)} <span class="text-sm">NTK</span></p>
-          </div>
-        }
+        actions={<JackpotMeter />}
       />
 
       <div class="grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -230,10 +229,19 @@ export default function Slots() {
               fallback={<p class="text-sm text-ink-400">{spinning() ? 'Spinning…' : freeSpins() ? `${freeSpins()} free spins waiting` : 'Good luck!'}</p>}
             >
               {(r) => (
-                <Show when={r().totalWin > 0} fallback={<p class="text-sm text-ink-400">No win this time.</p>}>
+                <Show
+                  when={r().totalWin > 0}
+                  fallback={
+                    <p class="flex flex-col items-center gap-0.5 text-sm text-ink-400">
+                      No win this time.
+                      <Show when={addedToJackpot(r())}>{(added) => <AddedToJackpot added={added()} />}</Show>
+                    </p>
+                  }
+                >
                   <div class="animate-pop flex flex-col items-center gap-1.5 text-center">
                     <p class="tabular text-3xl font-black text-win">+{tokens(r().totalWin)}</p>
                     <p class="text-xs text-ink-400">≈ {fiat(r().totalWin)}</p>
+                    <Show when={addedToJackpot(r())}>{(added) => <AddedToJackpot added={added()} />}</Show>
                     <div class="flex flex-wrap justify-center gap-1.5">
                       <For each={r().winningLines}>
                         {(l) => (
@@ -242,7 +250,10 @@ export default function Slots() {
                             <span class="text-ink-300">
                               Line {l.paylineId}: {l.count} × {symbolName(game.data, l.symbol)}
                             </span>
-                            <span class="tabular font-semibold text-win">+{tokens(l.win)}</span>
+                            {/* Five wilds win the jackpot, not the line's multiplier. */}
+                            <Show when={l.symbol === 'WILD' && l.count === 5} fallback={<span class="tabular font-semibold text-win">+{tokens(l.win)}</span>}>
+                              <span class="tabular font-semibold text-gold-300">Jackpot +{tokens(r().jackpotWin)}</span>
+                            </Show>
                           </span>
                         )}
                       </For>
@@ -300,6 +311,7 @@ export default function Slots() {
         </aside>
       </div>
       <FairnessModal open={fairOpen()} onClose={() => setFairOpen(false)} />
+      <JackpotCelebration wild={symbolName(game.data, 'WILD')} />
     </div>
   );
 }
