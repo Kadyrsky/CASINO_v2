@@ -25,8 +25,11 @@ use crate::gc::{DEADLOCK_APP_ID, GcSession};
 pub enum GcAnswer {
     /// The match is still being played or processed, or the GC does not know it.
     NotReady(String),
-    /// The GC is rate limiting this account or is too busy right now.
+    /// The GC is too busy right now, or rate limiting this account's result requests.
     Busy(String),
+    /// The GC is rate limiting this account's spectates: asking again soon only prolongs it, so
+    /// `serve` stops spectating for a while.
+    RateLimited(String),
     /// The GC refused for another reason.
     Refused(String),
 }
@@ -34,7 +37,9 @@ pub enum GcAnswer {
 impl std::fmt::Display for GcAnswer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotReady(m) | Self::Busy(m) | Self::Refused(m) => f.write_str(m),
+            Self::NotReady(m) | Self::Busy(m) | Self::RateLimited(m) | Self::Refused(m) => {
+                f.write_str(m)
+            }
         }
     }
 }
@@ -155,9 +160,8 @@ pub async fn spectate(
                 other.as_str_name()
             );
             Err(match other {
-                SpectateResult::KETooBusy | SpectateResult::KERateLimited => {
-                    GcAnswer::Busy(message)
-                }
+                SpectateResult::KERateLimited => GcAnswer::RateLimited(message),
+                SpectateResult::KETooBusy => GcAnswer::Busy(message),
                 SpectateResult::KENotInGame => GcAnswer::NotReady(message),
                 _ => GcAnswer::Refused(message),
             }
