@@ -1,0 +1,192 @@
+/*
+ * The casino-wide jackpot (jackpot.tsx): the odometer meter on the slots page, someone else's hit, the player's own
+ * celebration and the alert on other pages. Every colour comes from the theme's accent (--color-gold-*), so it suits
+ * each theme. Under prefers-reduced-motion nothing rolls, flies, spins or pulses (see the end).
+ */
+
+/* A slow shine passes over the meter now and then. */
+.jp-meter {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+.jp-meter::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(105deg, transparent 38%, color-mix(in oklab, var(--color-gold-300) 16%, transparent) 50%,
+      transparent 62%);
+  transform: translateX(-100%);
+  animation: jp-shine 8s ease-in-out infinite;
+}
+@keyframes jp-shine {
+  0%,
+  75% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Odometer: each digit is a wheel, a strip of 0–9 twice that slides up (lib/jackpotMeter.ts, wheelTarget). */
+.jp-odometer {
+  --jp-cell: 1.2em;
+  display: inline-flex;
+  flex-direction: row-reverse; /* the cells come from the right */
+  height: var(--jp-cell);
+  line-height: var(--jp-cell);
+}
+.jp-wheel {
+  display: inline-block;
+  height: var(--jp-cell);
+  overflow: hidden;
+}
+.jp-strip {
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.45s cubic-bezier(0.25, 0.8, 0.3, 1);
+}
+.jp-strip > span {
+  display: block;
+  height: var(--jp-cell);
+  text-align: center;
+}
+
+/* The amount swells and glows a little each time it grows (two names, so a pulse can restart the next one). */
+.jp-grew-a {
+  animation: jp-grew-a 0.7s ease-out;
+}
+.jp-grew-b {
+  animation: jp-grew-b 0.7s ease-out;
+}
+@keyframes jp-grew-a {
+  30% {
+    transform: scale(1.06);
+    text-shadow: 0 0 18px color-mix(in oklab, var(--color-gold-400) 75%, transparent);
+  }
+}
+@keyframes jp-grew-b {
+  30% {
+    transform: scale(1.06);
+    text-shadow: 0 0 18px color-mix(in oklab, var(--color-gold-400) 75%, transparent);
+  }
+}
+.jp-amount {
+  display: inline-block;
+  transform-origin: left center;
+}
+
+/* "+0.02" floats up from the amount and fades. */
+.jp-gain {
+  animation: jp-gain 1.4s ease-out forwards;
+}
+@keyframes jp-gain {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  15% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-16px);
+  }
+}
+
+/* Someone else hit it: the meter glows three times while coins fly out of it. */
+.jp-hit {
+  animation: jp-hit 1.2s ease-in-out 3;
+}
+@keyframes jp-hit {
+  50% {
+    box-shadow: 0 0 30px -2px color-mix(in oklab, var(--color-gold-400) 75%, transparent);
+    border-color: var(--color-gold-300);
+  }
+}
+
+/* Coins: from the middle of their box out to (--dx, --dy). */
+.jp-coin {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 9999px;
+  background: radial-gradient(circle at 35% 30%, var(--color-gold-300), var(--color-gold-500) 55%, var(--color-gold-600));
+  box-shadow: 0 0 8px color-mix(in oklab, var(--color-gold-400) 60%, transparent);
+  opacity: 0;
+  animation: jp-fly var(--jp-fly, 1.3s) cubic-bezier(0.15, 0.6, 0.3, 1) var(--delay, 0ms) both;
+}
+@keyframes jp-fly {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(0.3);
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(1) rotate(var(--spin, 180deg));
+  }
+}
+
+/* The player's own hit. */
+.jp-overlay {
+  animation: jp-fade 0.35s ease-out 0.25s both;
+}
+@keyframes jp-fade {
+  from {
+    opacity: 0;
+  }
+}
+.jp-rays {
+  background: repeating-conic-gradient(color-mix(in oklab, var(--color-gold-400) 13%, transparent) 0deg 9deg, transparent 9deg 18deg);
+  mask-image: radial-gradient(circle, #000 4%, transparent 38%);
+  animation: jp-turn 18s linear infinite;
+}
+@keyframes jp-turn {
+  to {
+    transform: rotate(1turn);
+  }
+}
+.jp-title {
+  background: linear-gradient(180deg, var(--color-gold-300), var(--color-gold-400) 45%, var(--color-gold-600));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 4px 24px color-mix(in oklab, var(--color-gold-500) 55%, transparent));
+  animation: jp-slam 0.6s cubic-bezier(0.2, 1.5, 0.4, 1) 0.35s both;
+}
+@keyframes jp-slam {
+  from {
+    opacity: 0;
+    transform: scale(2.2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jp-meter::after,
+  .jp-grew-a,
+  .jp-grew-b,
+  .jp-gain,
+  .jp-hit,
+  .jp-rays,
+  .jp-title,
+  .jp-overlay {
+    animation: none;
+  }
+  .jp-strip {
+    transition: none;
+  }
+  .jp-coin {
+    display: none;
+  }
+  /* Someone else's hit still shows, as a steady glow. */
+  .jp-hit {
+    box-shadow: 0 0 24px -4px color-mix(in oklab, var(--color-gold-400) 60%, transparent);
+    border-color: var(--color-gold-300);
+  }
+}

@@ -15,11 +15,11 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 import win.naebka.common.Json;
 
 /** A real WebSocket client for tests: sends JSON frames and waits for the frames the server sends back. */
-class TestSocket implements AutoCloseable {
+public class TestSocket implements AutoCloseable {
     private final BlockingQueue<JsonNode> inbox = new LinkedBlockingQueue<>();
     private final WebSocketSession session;
 
-    TestSocket(int port, String path) throws Exception {
+    public TestSocket(int port, String path) throws Exception {
         session = new StandardWebSocketClient().execute(new TextWebSocketHandler() {
             @Override
             protected void handleTextMessage(WebSocketSession s, TextMessage message) {
@@ -28,7 +28,7 @@ class TestSocket implements AutoCloseable {
         }, new WebSocketHttpHeaders(), URI.create("ws://localhost:" + port + path)).get(5, TimeUnit.SECONDS);
     }
 
-    void send(Map<String, Object> frame) throws Exception {
+    public void send(Map<String, Object> frame) throws Exception {
         sendRaw(Json.write(frame));
     }
 
@@ -37,7 +37,7 @@ class TestSocket implements AutoCloseable {
     }
 
     /** The next frame that matches, skipping others; fails after 5 s. */
-    JsonNode await(Predicate<JsonNode> match) throws InterruptedException {
+    public JsonNode await(Predicate<JsonNode> match) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (System.nanoTime() < deadline) {
             JsonNode next = inbox.poll(100, TimeUnit.MILLISECONDS);
@@ -48,12 +48,12 @@ class TestSocket implements AutoCloseable {
         throw new AssertionError("no matching WebSocket frame within 5 s");
     }
 
-    JsonNode awaitType(String type) throws InterruptedException {
+    public JsonNode awaitType(String type) throws InterruptedException {
         return await(f -> type.equals(f.path("type").asText()));
     }
 
     /** True if no frame matching arrives within the given time (for "must NOT be delivered" checks). */
-    boolean nothingFor(long millis, Predicate<JsonNode> match) throws InterruptedException {
+    public boolean nothingFor(long millis, Predicate<JsonNode> match) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(millis);
         while (System.nanoTime() < deadline) {
             JsonNode next = inbox.poll(50, TimeUnit.MILLISECONDS);
