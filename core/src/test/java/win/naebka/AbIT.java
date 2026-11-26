@@ -243,8 +243,15 @@ class AbIT extends IntegrationTestBase {
         call(HttpMethod.POST, "/api/ab/switches", Map.of("visitorId", laptop, "experiment", "theme",
                 "assigned", "hidden_king", "from", "hidden_king", "to", "archmother"), player);
 
+        call(HttpMethod.POST, "/api/ab/assignments", Map.of("visitorId", laptop,
+                "assignments", List.of(Map.of("experiment", "sfx_pack", "assigned", "soft", "current", "soft"))), player);
+
         JsonNode mine = Json.read(call(HttpMethod.GET, "/api/ab/mine", null, player).getBody());
         assertThat(mine.path("visitorId").asText()).isEqualTo(laptop.toString());
         assertThat(mine.path("choices").path("theme").asText()).isEqualTo("archmother");
+        assertThat(mine.path("choices").has("sfx_pack")).isFalse();
+        // What the laptop was given, which a new device keeps (it may not be what the new device would draw).
+        assertThat(mine.path("assigned").path("theme").asText()).isEqualTo("hidden_king");
+        assertThat(mine.path("assigned").path("sfx_pack").asText()).isEqualTo("soft");
     }
 }

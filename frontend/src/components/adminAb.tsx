@@ -6,7 +6,7 @@
 import { createQuery } from '@tanstack/solid-query';
 import { createMemo, createSignal, For, Show, type JSX } from 'solid-js';
 import { get } from '../api/client';
-import { EXPERIMENTS, type Experiment, type Goal, variantLabel } from '../lib/experiments';
+import { EXPERIMENTS, RETIRED_EXPERIMENTS, type Experiment, type Goal, variantLabel } from '../lib/experiments';
 import { ago, humanize } from '../lib/format';
 import { bradleyTerry, chanceBestPaired, chanceBestRates, confidence, median, wilson, type Confidence, type PairVote } from '../lib/stats';
 import { TAGS } from './QuickRating';
@@ -92,8 +92,12 @@ const CONFIDENCE: Record<Confidence, { label: string; tone: 'win' | 'gold' | 'ne
   early: { label: 'Too early', tone: 'neutral' },
 };
 
-const exp = (key: string) => EXPERIMENTS.find((e) => e.key === key);
+/** Every experiment the dashboard can show: those running, then those that have ended (their data stays). */
+const ALL = [...EXPERIMENTS, ...RETIRED_EXPERIMENTS];
+const exp = (key: string) => ALL.find((e) => e.key === key);
 const title = (key: string) => exp(key)?.title ?? key;
+/** Registry order: running experiments first, as listed, then ended ones, then anything unknown. */
+const rank = (key: string) => (ALL.some((e) => e.key === key) ? ALL.findIndex((e) => e.key === key) : ALL.length);
 const pct = (n: number, of: number) => (of ? `${((100 * n) / of).toFixed(0)}%` : '–');
 const percent = (x: number) => `${Math.round(100 * x)}%`;
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -269,7 +273,12 @@ export function RecommendationCard() {
 
 export function TasteTestCard() {
   const votes = useVotes();
-  const summaries = createMemo(() => EXPERIMENTS.filter((e) => e.taste).map((e) => summarize(e, votes.data ?? [])));
+  // Ended experiments only if they have answers (the old music stations do).
+  const summaries = createMemo(() =>
+    ALL.filter((e) => e.taste && (!RETIRED_EXPERIMENTS.includes(e) || votes.data?.some((v) => v.experiment === e.key))).map((e) =>
+      summarize(e, votes.data ?? []),
+    ),
+  );
   const exportVotes = () =>
     downloadCsv(
       'naebka-taste-test',
@@ -374,18 +383,25 @@ function metricCount(e: Experiment, v: VariantResult): number {
   return e.primary.metric === 'changed' ? v.switchedAway : (v.goals[e.primary.metric] ?? 0);
 }
 
-/** Registry order, so the control (the first variant) comes first. */
+/** Registry order, so the control (the first variant) comes first, and retired variants last. */
 function ordered(key: string, variants: VariantResult[]) {
-  const ids = exp(key)?.variants.map((v) => v.id) ?? [];
-  const rank = (id: string) => (ids.includes(id) ? ids.indexOf(id) : ids.length);
-  return [...variants].sort((a, b) => rank(a.variant) - rank(b.variant));
+  const e = exp(key);
+  const ids = [...(e?.variants ?? []), ...(e?.retired ?? [])].map((v) => v.id);
+  const at = (id: string) => (ids.includes(id) ? ids.indexOf(id) : ids.length);
+  return [...variants].sort((a, b) => at(a.variant) - at(b.variant));
+}
+
+/** A variant's name in the tables, marked if it is no longer offered. */
+function versionName(key: string, id: string) {
+  const gone = !!exp(key)?.retired?.some((v) => v.id === id);
+  return gone ? `${variantLabel(key, id)} (removed)` : variantLabel(key, id);
 }
 
 export function ExperimentsCard() {
   const results = useResults();
   const exportVisitors = async () => {
     const rows = await get<VisitorRow[]>('/api/admin/ab/visitors');
-    const keys = EXPERIMENTS.map((e) => e.key);
+    const keys = ALL.map((e) => e.key);
     const goals: Goal[] = ['registered', 'bet_placed', 'slot_spin', 'poker_sit', 'music_off', 'sounds_off'];
     downloadCsv(
       'naebka-visitors',
@@ -414,11 +430,14 @@ export function ExperimentsCard() {
     >
       <Show when={results.data?.length} fallback={<Empty title="No visitors yet" icon="⚗">Results appear once people open the site.</Empty>}>
         <div class="flex flex-col divide-y divide-ink-800">
-          <For each={results.data}>
+          <For each={[...(results.data ?? [])].sort((a, b) => rank(a.experiment) - rank(b.experiment))}>
             {(r) => {
               const e = () => exp(r.experiment);
               const rows = () => ordered(r.experiment, r.variants);
-              const audioGoal = (): Goal | null => (r.experiment === 'music' ? 'music_off' : r.experiment === 'sfx_pack' ? 'sounds_off' : null);
+              const audioGoal = (): Goal | null => {
+                const m = e()?.primary.metric;
+                return m === 'music_off' || m === 'sounds_off' ? m : null;
+              };
               const verdict = createMemo(() => {
                 const ex = e();
                 if (!ex) return null;
@@ -458,7 +477,7 @@ export function ExperimentsCard() {
                         <For each={rows()}>
                           {(v) => (
                             <tr class="border-t border-ink-800">
-                              <td class="py-2 pr-3 font-semibold">{variantLabel(r.experiment, v.variant)}</td>
+                              <td class="py-2 pr-3 font-semibold">{versionName(r.experiment, v.variant)}</td>
                               <td class="py-2 pr-3">{v.visitors}</td>
                               <td class={`py-2 pr-3 ${v.visitors && v.switchedAway / v.visitors > 0.2 ? 'text-loss' : ''}`}>
                                 {v.switchedAway} <span class="text-ink-400">({pct(v.switchedAway, v.visitors)})</span>
@@ -548,8 +567,8 @@ export function FeedbackCard() {
   const exportFeedback = () =>
     downloadCsv(
       'naebka-feedback',
-      ['created_at', 'source', 'rating', 'category', 'tags', 'message', 'path', 'username', 'viewport', ...EXPERIMENTS.map((e) => e.key)],
-      items().map((f) => [f.createdAt, f.source, f.rating, f.category, f.tags, f.message, f.path, f.username, f.viewport, ...EXPERIMENTS.map((e) => f.variants[e.key] ?? '')]),
+      ['created_at', 'source', 'rating', 'category', 'tags', 'message', 'path', 'username', 'viewport', ...ALL.map((e) => e.key)],
+      items().map((f) => [f.createdAt, f.source, f.rating, f.category, f.tags, f.message, f.path, f.username, f.viewport, ...ALL.map((e) => f.variants[e.key] ?? '')]),
     );
   return (
     <Card
@@ -560,10 +579,10 @@ export function FeedbackCard() {
           <Show when={average()}>{(avg) => <span class="text-xs text-ink-400">avg {avg()} of {items().length}</span>}</Show>
           <Select class="!h-8 w-48 text-xs" value={filter()} onChange={(e) => setFilter(e.currentTarget.value)} aria-label="Filter by version">
             <option value="">All versions</option>
-            <For each={EXPERIMENTS}>
+            <For each={ALL}>
               {(e) => (
                 <optgroup label={e.title}>
-                  <For each={e.variants}>{(v) => <option value={`${e.key}:${v.id}`}>{v.label}</option>}</For>
+                  <For each={[...e.variants, ...(e.retired ?? [])]}>{(v) => <option value={`${e.key}:${v.id}`}>{v.label}</option>}</For>
                 </optgroup>
               )}
             </For>

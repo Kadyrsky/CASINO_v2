@@ -1,11 +1,12 @@
 /**
  * Sound controls: the speaker button in the header (mutes everything; so does the M key) and the Sound tab of the
- * Customize panel (music station, sound pack, on/off and volume for each).
+ * Customize panel (music pack and its version, sound pack, on/off and volume for each).
  */
 import { For, Show, type JSX } from 'solid-js';
 import { audio } from '../lib/audio';
 import { ab, experiment } from '../lib/experiments';
-import { musicFiles, stationAvailable, STATIONS, trackTitle } from '../lib/musicCatalog';
+import { musicFiles, packAvailable, versionAvailable } from '../lib/musicCatalog';
+import { MUSIC_PACKS, trackTitle, versionExperiment } from '../lib/musicPacks';
 import { sounds } from '../lib/sounds';
 import { artOf } from './variantArt';
 
@@ -52,7 +53,8 @@ export function SoundButton() {
   );
 }
 
-function Switch(props: { on: boolean; onChange: (on: boolean) => void; label: string }) {
+/** An on/off switch (not called Switch: the Solid compiler would put its own Switch in its place in dev builds). */
+function Toggle(props: { on: boolean; onChange: (on: boolean) => void; label: string }) {
   return (
     <button
       role="switch"
@@ -98,8 +100,8 @@ function OptionTile(props: { experiment: string; id: string; selected: boolean; 
       }`}
     >
       <span class={`grid size-10 shrink-0 place-items-center rounded-lg ${art()?.bg ?? 'bg-ink-800'} [&_img]:size-7 [&_span]:text-xl`}>{art()?.art()}</span>
-      <span class="min-w-0 leading-tight">
-        <span class="block truncate text-sm font-semibold text-ink-100">{label()}</span>
+      <span class="min-w-0 pr-2 leading-tight">
+        <span class="line-clamp-2 block text-sm font-semibold text-ink-100">{label()}</span>
         <span class="line-clamp-2 block text-[11px] leading-tight text-ink-400">{art()?.note}</span>
       </span>
       {props.badge}
@@ -116,20 +118,64 @@ function Bars() {
   );
 }
 
+/** The versions of the music pack the visitor is on, if it has several: switching one switches the music. */
+function Versions() {
+  const pack = () => ab.committed('music_pack');
+  return (
+    <Show when={versionExperiment(pack())}>
+      {(key) => (
+        <div class="flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label={experiment(key()).title}>
+          <span class="mr-0.5 text-xs text-ink-400">Version</span>
+          <For each={experiment(key()).variants}>
+            {(v) => {
+              const selected = () => ab.committed(key()) === v.id;
+              return (
+                <button
+                  role="radio"
+                  aria-checked={selected()}
+                  data-sound="none"
+                  disabled={!versionAvailable(pack(), v.id)}
+                  onClick={() => {
+                    ab.choose(key(), v.id);
+                    const s = audio.settings();
+                    if (!s.musicOn || s.muted) sounds.setMusicOn(true);
+                  }}
+                  class={`rounded-full px-2.5 py-1 text-xs font-semibold ring-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                    selected() ? 'bg-gold-500/15 text-gold-300 ring-gold-500/60' : 'text-ink-300 ring-ink-700 hover:bg-ink-800 hover:text-ink-100'
+                  }`}
+                >
+                  {v.label}
+                </button>
+              );
+            }}
+          </For>
+        </div>
+      )}
+    </Show>
+  );
+}
+
 export function SoundSettings() {
   const s = audio.settings;
-  const music = experiment('music');
+  const music = experiment('music_pack');
   const packs = experiment('sfx_pack');
-  const noMusic = () => musicFiles.ready() && !Object.keys(STATIONS).some(stationAvailable);
+  const noMusic = () => musicFiles.ready() && !MUSIC_PACKS.some((p) => packAvailable(p.id));
 
-  const pickStation = (id: string) => {
-    ab.choose('music', id);
+  const pickMusic = (id: string) => {
+    ab.choose('music_pack', id);
     if (!s().musicOn || s().muted) sounds.setMusicOn(true);
   };
   const pickPack = (id: string) => {
     ab.choose('sfx_pack', id);
     if (!s().sfxOn || s().muted) sounds.setSfxOn(true);
-    sounds.previewPack(id);
+    sounds.previewSounds(id);
+  };
+  const status = () => {
+    const m = sounds.music();
+    if (!audio.unlocked() && s().musicOn) return 'Music starts after your first click.';
+    if (!s().musicOn || s().muted || s().musicVolume === 0) return 'Music is off.';
+    if (m.failed) return 'This track couldn’t be loaded.';
+    return 'Loading…';
   };
 
   return (
@@ -146,7 +192,7 @@ export function SoundSettings() {
       <section class="flex flex-col gap-2">
         <div class="flex items-center justify-between gap-3">
           <h4 class="text-xs font-semibold uppercase tracking-wider text-ink-400">Music</h4>
-          <Switch on={s().musicOn} onChange={sounds.setMusicOn} label="Music" />
+          <Toggle on={s().musicOn} onChange={sounds.setMusicOn} label="Music" />
         </div>
         <Volume value={s().musicVolume} onInput={sounds.setMusicVolume} disabled={!s().musicOn || s().muted} label="Music volume" />
         <Show
@@ -155,36 +201,27 @@ export function SoundSettings() {
             <p class="text-xs text-ink-400">This server has no music files yet (see “No music?” in the README).</p>
           }
         >
-          <div class="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Music station">
+          <div class="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Music pack">
             <For each={music.variants}>
               {(v) => (
                 <OptionTile
-                  experiment="music"
+                  experiment="music_pack"
                   id={v.id}
-                  selected={ab.committed('music') === v.id}
-                  disabled={!stationAvailable(v.id)}
-                  onPick={() => pickStation(v.id)}
-                  badge={<Show when={ab.committed('music') === v.id && audio.music.playing()}><Bars /></Show>}
+                  selected={ab.committed('music_pack') === v.id}
+                  disabled={!packAvailable(v.id)}
+                  onPick={() => pickMusic(v.id)}
+                  badge={<Show when={ab.committed('music_pack') === v.id && sounds.music().playing}><Bars /></Show>}
                 />
               )}
             </For>
           </div>
-          <div class="flex min-h-7 items-center justify-between gap-2 text-xs text-ink-400">
-            <Show
-              when={sounds.nowPlaying()}
-              fallback={<span>{audio.unlocked() || !s().musicOn ? (s().musicOn && !s().muted ? 'Starting…' : 'Music is off.') : 'Music starts after your first click.'}</span>}
-            >
+          <Versions />
+          <div class="flex min-h-7 items-center gap-2 text-xs text-ink-400">
+            <Show when={sounds.nowPlaying()} fallback={<span>{status()}</span>}>
               {(slug) => (
-                <>
-                  <span class="truncate">
-                    ♪ <span class="text-ink-200">{trackTitle(slug())}</span> · Deadlock OST
-                  </span>
-                  <Show when={(STATIONS[ab.committed('music')]?.tracks.length ?? 0) > 1}>
-                    <button class="shrink-0 rounded-md px-2 py-1 font-semibold text-ink-300 ring-1 ring-ink-700 hover:bg-ink-800 hover:text-ink-100" onClick={sounds.skip}>
-                      Next ⏭
-                    </button>
-                  </Show>
-                </>
+                <span class="truncate">
+                  ♪ <span class="text-ink-200">{trackTitle(slug())}</span> · Deadlock OST
+                </span>
               )}
             </Show>
           </div>
@@ -194,7 +231,7 @@ export function SoundSettings() {
       <section class="flex flex-col gap-2 border-t border-ink-700 pt-3">
         <div class="flex items-center justify-between gap-3">
           <h4 class="text-xs font-semibold uppercase tracking-wider text-ink-400">Sound effects</h4>
-          <Switch on={s().sfxOn} onChange={sounds.setSfxOn} label="Sound effects" />
+          <Toggle on={s().sfxOn} onChange={sounds.setSfxOn} label="Sound effects" />
         </div>
         <Volume
           value={s().sfxVolume}
@@ -203,7 +240,7 @@ export function SoundSettings() {
           disabled={!s().sfxOn || s().muted}
           label="Sound effects volume"
         />
-        <div class="grid grid-cols-1 gap-2" role="radiogroup" aria-label="Sound pack">
+        <div class="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Sound pack">
           <For each={packs.variants}>
             {(v) => <OptionTile experiment="sfx_pack" id={v.id} selected={ab.committed('sfx_pack') === v.id} onPick={() => pickPack(v.id)} />}
           </For>

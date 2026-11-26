@@ -9,112 +9,26 @@
  * side, "which do you prefer?". Each answer compares two versions for the same person, which tells far more per
  * visitor (see docs/ab-testing.md).
  *
+ * The music is two levels: `music_pack` picks the pack (musicPacks.ts), and each pack with several versions of its
+ * track has its own experiment, `music_<pack>`, for the version (its `parent` is the pack). Every visitor is given a
+ * version of every pack, so whichever pack they end up on, they hear a fairly drawn version of it.
+ *
  * To add an experiment: add it to EXPERIMENTS, read it with variant('key') where the UI differs, and call
- * expose('key') where people actually see or hear it (see Slots.tsx, sounds.ts).
+ * expose('key') where people actually see or hear it (see Slots.tsx, sounds.ts). To add a version to a running
+ * experiment, give it `since` (abAssign.ts) so the visitors already in the test keep theirs. To take a version out,
+ * move it to `retired`: the dashboard still names it in the data it has, and anyone on it goes back to the version
+ * they were given.
  *
  * Testers can force variants with ?ab=theme:archmother,slot_icons:classic. Forced variants stay for the browser tab and
  * are not reported, so Lighthouse runs and QA don't count as visitors.
  */
 import { createEffect, createRenderEffect, createRoot, createSignal, on } from 'solid-js';
 import { get, post } from '../api/client';
+import { draw, ROUND, roundOf } from './abAssign';
 import { auth } from './auth';
+import { EXPERIMENTS, experiment, type Goal } from './experimentRegistry';
 
-/** Goals counted per variant on the admin dashboard. The last two are reactions to the audio. */
-export type Goal = 'registered' | 'bet_placed' | 'slot_spin' | 'poker_sit' | 'music_off' | 'sounds_off';
-
-export interface Experiment {
-  key: string;
-  title: string;
-  description: string;
-  /**
-   * The first variant is the control. A pickOnly variant is never given at random and isn't in the taste test;
-   * people can only choose it under Customize (e.g. the old look, for those who prefer it).
-   */
-  variants: { id: string; label: string; pickOnly?: boolean }[];
-  /** Shown under Customize so people can pick it themselves. */
-  switchable: boolean;
-  /** The Customize tab it is on. */
-  group: 'look' | 'sound' | 'text';
-  /**
-   * The one number the between-visitors comparison is judged on, chosen before the test so nobody goes fishing
-   * among many numbers afterwards. 'changed' = switched away by hand under Customize.
-   */
-  primary: { metric: Goal | 'changed'; better: 'lower' | 'higher' };
-  /** In the taste test: the question, and how people try both versions (switch the page, listen, or just look). */
-  taste?: { question: string; tryBy: 'page' | 'listen' | 'look' };
-}
-
-export const EXPERIMENTS: Experiment[] = [
-  {
-    key: 'theme',
-    title: 'Theme',
-    description: 'The colours and style of the whole site.',
-    variants: [
-      { id: 'hidden_king', label: 'Hidden King' },
-      { id: 'archmother', label: 'Archmother' },
-      { id: 'deadlock', label: 'Deadlock' },
-      { id: 'classic', label: 'Classic', pickOnly: true },
-    ],
-    switchable: true,
-    group: 'look',
-    primary: { metric: 'changed', better: 'lower' },
-    taste: { question: 'Which look do you like more?', tryBy: 'page' },
-  },
-  {
-    key: 'music',
-    title: 'Music',
-    description: 'Deadlock’s soundtrack, in stations.',
-    variants: [
-      { id: 'lounge', label: 'Lounge' },
-      { id: 'hideout', label: 'Hideout' },
-      { id: 'gothic', label: 'Gothic' },
-      { id: 'rift', label: 'Rift Fight', pickOnly: true },
-    ],
-    switchable: true,
-    group: 'sound',
-    primary: { metric: 'music_off', better: 'lower' },
-    taste: { question: 'Which music do you like more?', tryBy: 'listen' },
-  },
-  {
-    key: 'sfx_pack',
-    title: 'Sound effects',
-    description: 'What buttons, spins and wins sound like.',
-    variants: [
-      { id: 'deadlock', label: 'Deadlock' },
-      { id: 'arcade', label: 'Arcade' },
-      { id: 'soft', label: 'Soft' },
-    ],
-    switchable: true,
-    group: 'sound',
-    primary: { metric: 'sounds_off', better: 'lower' },
-    taste: { question: 'Which sounds do you like more?', tryBy: 'listen' },
-  },
-  {
-    key: 'slot_icons',
-    title: 'Slot symbols',
-    description: 'The pictures on the Soul Reels slot machine.',
-    variants: [
-      { id: 'deadlock', label: 'Deadlock items' },
-      { id: 'classic', label: 'Classic fruit' },
-    ],
-    switchable: true,
-    group: 'look',
-    primary: { metric: 'changed', better: 'lower' },
-    taste: { question: 'Which slot symbols do you like more?', tryBy: 'look' },
-  },
-  {
-    key: 'join_cta',
-    title: 'Sign-up button',
-    description: 'The text of the sign-up button in the header.',
-    variants: [
-      { id: 'join', label: 'Join' },
-      { id: 'bonus', label: 'Get 1,000 free NTK' },
-    ],
-    switchable: false,
-    group: 'text',
-    primary: { metric: 'registered', better: 'higher' },
-  },
-];
+export { EXPERIMENTS, RETIRED_EXPERIMENTS, experiment, variantLabel, type Experiment, type Goal } from './experimentRegistry';
 
 /** Where a switch came from: the Customize panel or a taste-test answer. */
 export type SwitchSource = 'customize' | 'taste_test';
@@ -132,9 +46,13 @@ export interface Vote {
 }
 
 const VISITOR_KEY = 'naebka.visitor';
+const ROUND_KEY = 'naebka.ab.round';
 const CHOICES_KEY = 'naebka.ab.choices';
+const ASSIGNED_KEY = 'naebka.ab.assigned';
 const OVERRIDES_KEY = 'naebka.ab.overrides';
 const GOALS_KEY = 'naebka.ab.goals';
+/** Switches made under Customize within this many ms are reported as one (from the first to the last). */
+const SWITCH_SETTLE_MS = 1500;
 
 function read<T>(storage: Storage | undefined, key: string, fallback: T): T {
   try {
@@ -156,52 +74,40 @@ function write(storage: Storage | undefined, key: string, value: unknown) {
 const local = typeof localStorage === 'undefined' ? undefined : localStorage;
 const session = typeof sessionStorage === 'undefined' ? undefined : sessionStorage;
 
-function loadVisitorId(): string {
-  const id = read<string | null>(local, VISITOR_KEY, null);
-  if (id && /^[0-9a-f-]{36}$/.test(id)) return id;
-  const fresh = crypto.randomUUID();
-  write(local, VISITOR_KEY, fresh);
-  return fresh;
+/** Whether `id` is a variant of the experiment people can be on now. */
+const isVariant = (key: string, id: unknown) => typeof id === 'string' && !!EXPERIMENTS.find((e) => e.key === key)?.variants.some((v) => v.id === id);
+
+/** Only the entries that are variants people can be on now (old experiments and retired variants dropped). */
+function valid(map: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(map).filter(([k, v]) => isVariant(k, v)));
 }
 
 /** ?ab=theme:archmother,slot_icons:classic forces variants for this tab. */
 function loadOverrides(): Record<string, string> {
-  const saved = read<Record<string, string>>(session, OVERRIDES_KEY, {});
-  const param = new URLSearchParams(location.search).get('ab');
+  const saved = valid(read<Record<string, string>>(session, OVERRIDES_KEY, {}));
+  const param = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('ab');
   if (param == null) return saved;
   const forced: Record<string, string> = {};
   for (const pair of param.split(',')) {
     const [key, value] = pair.split(':');
-    const exp = EXPERIMENTS.find((e) => e.key === key);
-    if (exp && exp.variants.some((v) => v.id === value)) forced[key!] = value!;
+    if (isVariant(key!, value)) forced[key!] = value!;
   }
   write(session, OVERRIDES_KEY, forced);
   return forced;
 }
 
-/** FNV-1a: a stable number from the visitor id and the experiment, so assignment needs no server call. */
-function hash(text: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) {
-    h ^= text.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
-}
-
-export function experiment(key: string): Experiment {
-  const exp = EXPERIMENTS.find((e) => e.key === key);
-  if (!exp) throw new Error(`Unknown experiment ${key}`);
-  return exp;
-}
-
-export function variantLabel(key: string, id: string): string {
-  return EXPERIMENTS.find((e) => e.key === key)?.variants.find((v) => v.id === id)?.label ?? id;
-}
-
 export const ab = createRoot(() => {
-  const [visitorId, setVisitorId] = createSignal(loadVisitorId());
-  const [choices, setChoices] = createSignal<Record<string, string>>(read(local, CHOICES_KEY, {}));
+  const hadVisitor = /^[0-9a-f-]{36}$/.test(String(read<string | null>(local, VISITOR_KEY, null)));
+  const [visitorId, setVisitorId] = createSignal(hadVisitor ? read<string>(local, VISITOR_KEY, '') : crypto.randomUUID());
+  if (!hadVisitor) write(local, VISITOR_KEY, visitorId());
+  // The round of the random draw this visitor is in (abAssign.ts): visitors from before keep their versions.
+  let round = roundOf(read<unknown>(local, ROUND_KEY, null), hadVisitor);
+  write(local, ROUND_KEY, round);
+  // Old choices (a retired theme, the old music stations) are dropped: those visitors go back to what they were given.
+  const [choices, setChoices] = createSignal<Record<string, string>>(valid(read(local, CHOICES_KEY, {})));
+  write(local, CHOICES_KEY, choices());
+  // What the core says this visitor was given (after logging in on another device), which wins over the draw.
+  const [known, setKnown] = createSignal<Record<string, string>>(valid(read(local, ASSIGNED_KEY, {})));
   // Shown for a moment by the taste test, without being chosen or reported.
   const [previews, setPreviews] = createSignal<Record<string, string>>({});
   const overrides = loadOverrides();
@@ -209,16 +115,12 @@ export const ab = createRoot(() => {
   const exposed = new Set<string>();
   let pending = new Set<string>();
 
-  const assigned = (key: string) => {
-    const pool = experiment(key).variants.filter((v) => !v.pickOnly);
-    return pool[hash(`${visitorId()}:${key}`) % pool.length]!.id;
-  };
+  const assigned = (key: string) => known()[key] ?? draw(experiment(key), visitorId(), round);
 
   /** The version the visitor is on: forced, chosen, or the one they were given. */
   const committed = (key: string) => {
-    const exp = experiment(key);
     const pick = overrides[key] ?? choices()[key];
-    return pick && exp.variants.some((v) => v.id === pick) ? pick : assigned(key);
+    return pick && isVariant(key, pick) ? pick : assigned(key);
   };
 
   /** What to show now: a taste-test preview if there is one, otherwise the committed version. */
@@ -245,8 +147,24 @@ export const ab = createRoot(() => {
     pending.add(key);
   };
 
+  // Switching back and forth under Customize (trying the themes, say) is reported once it settles, as one switch from
+  // where the visitor started to where they ended (none if they came back).
+  const settling = new Map<string, { from: string; timer: number }>();
+  const report = (key: string) => {
+    const s = settling.get(key);
+    if (!s) return;
+    window.clearTimeout(s.timer);
+    settling.delete(key);
+    const to = committed(key);
+    if (s.from !== to) send('/api/ab/switches', { experiment: key, assigned: assigned(key), from: s.from, to, source: 'customize' });
+  };
+  if (typeof window !== 'undefined') window.addEventListener('pagehide', () => [...settling.keys()].forEach(report));
+
   /** Switches to another variant. Picking the assigned one clears the choice. */
   const choose = (key: string, to: string, source: SwitchSource = 'customize') => {
+    if (!isVariant(key, to)) return;
+    // A taste-test answer is reported at once; a Customize switch still settling goes first, as it was.
+    if (source === 'taste_test') report(key);
     const from = committed(key);
     if (from === to) return;
     const next = { ...choices() };
@@ -254,7 +172,13 @@ export const ab = createRoot(() => {
     else next[key] = to;
     setChoices(next);
     write(local, CHOICES_KEY, next);
-    send('/api/ab/switches', { experiment: key, assigned: assigned(key), from, to, source });
+    if (source === 'taste_test') {
+      send('/api/ab/switches', { experiment: key, assigned: assigned(key), from, to, source });
+      return;
+    }
+    const s = settling.get(key);
+    if (s) window.clearTimeout(s.timer);
+    settling.set(key, { from: s?.from ?? from, timer: window.setTimeout(() => report(key), SWITCH_SETTLE_MS) });
   };
 
   /** Shows a version without choosing it (the taste test's "try it"); null ends the preview. */
@@ -276,20 +200,27 @@ export const ab = createRoot(() => {
   /** One taste-test answer. */
   const vote = (v: Vote) => send('/api/ab/votes', v);
 
-  // After logging in on another device, take over that device's visitor id and choices, so the player keeps
-  // the versions they had and isn't counted twice. Then (re)send what this page has shown, linked to the account.
+  // After logging in on another device, take over that device's visitor id, what it was given and its choices, so
+  // the player keeps the versions they had and isn't counted twice. Then (re)send what this page has shown, linked to
+  // the account.
   createEffect(
     on(
       () => auth.user()?.id,
       (userId) => {
         if (!userId || testing) return;
-        get<{ visitorId: string | null; choices: Record<string, string> }>('/api/ab/mine')
+        get<{ visitorId: string | null; choices: Record<string, string>; assigned?: Record<string, string> }>('/api/ab/mine')
           .then((mine) => {
             if (mine.visitorId && mine.visitorId !== visitorId()) {
+              [...settling.keys()].forEach(report);
               setVisitorId(mine.visitorId);
               write(local, VISITOR_KEY, mine.visitorId);
-              setChoices(mine.choices);
-              write(local, CHOICES_KEY, mine.choices);
+              // Experiments that visitor never saw are drawn as for someone new.
+              round = ROUND;
+              write(local, ROUND_KEY, round);
+              setKnown(valid(mine.assigned ?? {}));
+              write(local, ASSIGNED_KEY, known());
+              setChoices(valid(mine.choices));
+              write(local, CHOICES_KEY, choices());
             }
           })
           .catch(() => {})
@@ -302,15 +233,15 @@ export const ab = createRoot(() => {
     ),
   );
 
-  // Themes are applied with data attributes on <html>; styles.css has the variables for each one. The Deadlock
-  // themes also switch on the Deadlock style (font, moving background, wobbling buttons); Classic is the old look.
-  // A render effect runs straight away, so the page never flashes the other theme.
-  createRenderEffect(() => {
-    const theme = variant('theme');
-    document.documentElement.dataset.abTheme = theme;
-    if (theme === 'classic') delete document.documentElement.dataset.abStyle;
-    else document.documentElement.dataset.abStyle = 'deadlock';
-  });
+  // Themes are applied with a data attribute on <html>; styles.css has the variables for each one, and the Deadlock
+  // style (font, moving background, wobbling buttons) they all share. A render effect runs straight away, so the page
+  // never flashes another theme.
+  if (typeof document !== 'undefined') {
+    createRenderEffect(() => {
+      document.documentElement.dataset.abTheme = variant('theme');
+      document.documentElement.dataset.abStyle = 'deadlock';
+    });
+  }
 
   return {
     visitorId,

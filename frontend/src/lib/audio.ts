@@ -4,14 +4,18 @@
  * sounds.ts wires everything to the site.
  *
  *   limiter ← master ─┬─ sfx bus ──── synthesized sounds and Deadlock stingers
- *                     ├─ music bus ── duck ─┬─ deck A  (two <audio> elements, so tracks cross-fade)
- *                     │                     └─ deck B
+ *                     ├─ music bus ── duck ── the track playing, and at most one fading out (musicPlayer.ts)
  *                     └─ preview bus ──────── demos and music previews (play even when sound is off: asked for)
+ *
+ * Music loops: tracks up to 75 seconds (the game's loops) are decoded and looped by Web Audio exactly at the end of
+ * their audio, so a loop has no gap; longer ones stream through an <audio> element, since decoding a four-minute
+ * track would take ~100 MB. Which track plays, loads and fades is musicPlayer.ts.
  *
  * Browsers only allow sound after the visitor clicks or presses a key, so the graph is built on the first one.
  * Effects are synthesized (no files, no latency); music streams from /music (see scripts/wiki_music.py).
  */
 import { createRoot, createSignal } from 'solid-js';
+import { loopPoints, MusicPlayer, type Loaded, type LoopTrack, type MusicOutput, type PlayerState, type Voice as MusicVoice } from './musicPlayer';
 
 export interface AudioSettings {
   /** Everything off: the speaker button in the header, or the M key. */
@@ -27,7 +31,10 @@ export interface AudioSettings {
 export const AUDIO_DEFAULTS: AudioSettings = { muted: false, sfxOn: true, sfxVolume: 0.7, musicOn: true, musicVolume: 0.5 };
 
 const SETTINGS_KEY = 'naebka.audio';
-const CROSSFADE = 2.5;
+/** Longer tracks stream instead of being decoded (seconds). */
+const STREAM_OVER = 75;
+/** Decoded tracks kept for switching back (the loops are up to ~25 MB each). */
+const KEEP_DECODED = 2;
 
 function loadSettings(): AudioSettings {
   try {
@@ -84,22 +91,7 @@ export interface Voice {
   noise(o: NoiseOptions): void;
 }
 
-export interface MusicTrack {
-  id: string;
-  url: string;
-  /** How many times the file loops before the next track. */
-  repeat: number;
-  /** Playback gain that evens out the tracks' loudness (musicCatalog.ts). */
-  gain: number;
-}
-
-interface Deck {
-  el: HTMLAudioElement;
-  gain: GainNode | null;
-  track: MusicTrack | null;
-  loops: number;
-  last: number;
-}
+export type { LoopTrack, PlayerState };
 
 /** A tiny silent WAV: playing it inside a click "unlocks" an <audio> element on iOS for later. */
 const SILENCE = `data:audio/wav;base64,${btoa(
@@ -115,11 +107,17 @@ function newElement(): HTMLAudioElement {
   return el;
 }
 
+/** An <audio> element for streaming music, with its own gain into the music bus. */
+interface Stream {
+  el: HTMLAudioElement;
+  gain: GainNode;
+  busy: boolean;
+}
+
 export const audio = createRoot(() => {
   const [settings, setSettingsSignal] = createSignal<AudioSettings>(loadSettings());
   const [unlocked, setUnlocked] = createSignal(false);
-  const [current, setCurrent] = createSignal<{ list: MusicTrack[]; index: number } | null>(null);
-  const [playing, setPlaying] = createSignal(false);
+  const [musicState, setMusicState] = createSignal<PlayerState>({ track: null, playing: false, audible: false, loading: false, failed: false });
   const [previewing, setPreviewing] = createSignal<string | null>(null);
 
   let ctx: AudioContext | null = null;
@@ -130,15 +128,9 @@ export const audio = createRoot(() => {
   let previewBus!: GainNode;
   let noiseBuffer!: AudioBuffer;
 
-  const decks: [Deck, Deck] = [
-    { el: newElement(), gain: null, track: null, loops: 0, last: 0 },
-    { el: newElement(), gain: null, track: null, loops: 0, last: 0 },
-  ];
-  let active = 0;
-  let advancing = false;
-  // What the music should be doing, so a track that is still starting when pause() is called doesn't start anyway.
-  let intent: 'play' | 'pause' = 'pause';
-  const previewEl = newElement();
+  // Three are enough: the track playing, the one fading out, and the one loading.
+  const streams: Stream[] = [];
+  let previewEl: HTMLAudioElement | null = null;
   let previewGain: GainNode | null = null;
   let previewTimer: number | undefined;
 
@@ -177,11 +169,14 @@ export const audio = createRoot(() => {
     const data = noiseBuffer.getChannelData(0);
     for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
 
-    for (const d of decks) {
-      d.gain = c.createGain();
-      d.gain.gain.value = 0;
-      c.createMediaElementSource(d.el).connect(d.gain).connect(duck);
+    for (let i = 0; i < 3; i++) {
+      const el = newElement();
+      const gain = c.createGain();
+      gain.gain.value = 0;
+      c.createMediaElementSource(el).connect(gain).connect(duck);
+      streams.push({ el, gain, busy: false });
     }
+    previewEl = newElement();
     previewGain = c.createGain();
     previewGain.gain.value = 0;
     c.createMediaElementSource(previewEl).connect(previewGain).connect(previewBus);
@@ -202,9 +197,8 @@ export const audio = createRoot(() => {
     } catch {
       return; // no Web Audio: the site stays silent
     }
-    prime(decks[0].el);
-    prime(decks[1].el);
-    prime(previewEl);
+    for (const s of streams) if (!s.busy) prime(s.el);
+    if (previewEl) prime(previewEl);
     // Sounds asked for now are scheduled and play the moment the context runs, so the first click isn't lost.
     setUnlocked(true);
     const done = () => {
@@ -229,6 +223,30 @@ export const audio = createRoot(() => {
       // storage blocked: the settings last for this page only
     }
     applyGains();
+  };
+
+  /** Ramps a gain from where it is now. */
+  const ramp = (p: AudioParam, to: number, seconds: number) => {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    p.cancelScheduledValues(t);
+    p.setValueAtTime(p.value, t);
+    p.linearRampToValueAtTime(to, t + Math.max(0.005, seconds));
+  };
+
+  // ---- Ducking: the music goes quiet under a preview, and lower under a stinger ----
+
+  let previewDuck = false;
+  let stingerDuck = { until: 0, level: 1 };
+
+  /** Sets the music's duck from everything that wants it lower now: the quietest wins, so nothing undoes another. */
+  const applyDuck = () => {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const underStinger = t < stingerDuck.until;
+    duck.gain.cancelScheduledValues(t);
+    duck.gain.setTargetAtTime(previewDuck ? 0 : underStinger ? stingerDuck.level : 1, t, previewDuck ? 0.1 : 0.06);
+    if (!previewDuck && underStinger) duck.gain.setTargetAtTime(1, stingerDuck.until, 0.5);
   };
 
   // ---- Synthesized sounds ----
@@ -318,7 +336,6 @@ export const audio = createRoot(() => {
   const decoded = new Map<string, AudioBuffer>();
   const loading = new Map<string, Promise<void>>();
   let stinger: { src: AudioBufferSourceNode; gain: GainNode } | null = null;
-  let duckUntil = 0;
 
   const preload = (url: string) => {
     if (!ctx || decoded.has(url) || loading.has(url)) return;
@@ -333,20 +350,12 @@ export const audio = createRoot(() => {
     );
   };
 
-  const duckMusic = (seconds: number, level: number) => {
-    if (!ctx) return;
-    const t = ctx.currentTime;
-    duckUntil = Math.max(duckUntil, t + seconds);
-    duck.gain.cancelScheduledValues(t);
-    duck.gain.setTargetAtTime(level, t, 0.06);
-    duck.gain.setTargetAtTime(1, duckUntil, 0.5);
-  };
-
   /**
    * Plays a stinger if it is already loaded (and starts loading it if not), so a sound never arrives late; the
-   * caller plays a synthesized stand-in when this returns false. One stinger at a time; the music ducks under it.
+   * caller plays a synthesized stand-in when this returns false. One stinger at a time: a new one cuts the last one
+   * off. The music ducks to `duck` (0..1) under it.
    */
-  const playStinger = (url: string, opts: { maxSeconds?: number; gain?: number; demo?: boolean } = {}) => {
+  const playStinger = (url: string, opts: { maxSeconds?: number; gain?: number; demo?: boolean; duck?: number } = {}) => {
     if (!ctx || ctx.state === 'closed') return false;
     const buf = decoded.get(url);
     if (!buf) {
@@ -378,176 +387,220 @@ export const audio = createRoot(() => {
     src.onended = () => {
       if (stinger?.src === src) stinger = null;
     };
-    duckMusic(len, 0.3);
+    // The stinger it cut off no longer holds the music down.
+    stingerDuck = { until: t + len, level: opts.duck ?? 0.3 };
+    applyDuck();
     return true;
   };
 
   // ---- Music ----
 
-  const fade = (d: Deck, to: number, seconds: number) => {
-    if (!ctx || !d.gain) return;
-    const t = ctx.currentTime;
-    d.gain.gain.cancelScheduledValues(t);
-    d.gain.gain.setValueAtTime(d.gain.gain.value, t);
-    d.gain.gain.linearRampToValueAtTime(to, t + seconds);
+  /** Decoded loops, most recently used last. */
+  const buffers = new Map<string, AudioBuffer>();
+
+  const decodeTrack = async (url: string, signal: AbortSignal): Promise<AudioBuffer | null> => {
+    const c = ctx;
+    if (!c) return null;
+    const hit = buffers.get(url);
+    if (hit) {
+      buffers.delete(url);
+      buffers.set(url, hit);
+      return hit;
+    }
+    const r = await fetch(url, { signal });
+    if (!r.ok) return null;
+    const buf = await c.decodeAudioData(await r.arrayBuffer());
+    if (signal.aborted) return null;
+    buffers.set(url, buf);
+    while (buffers.size > KEEP_DECODED) buffers.delete(buffers.keys().next().value!);
+    return buf;
   };
 
-  const start = (list: MusicTrack[], index: number, seconds: number) => {
-    const track = list[index];
-    if (!track) return;
-    const from = decks[active]!;
-    active = 1 - active;
-    const to = decks[active]!;
-    advancing = false;
-    to.track = track;
-    to.loops = 0;
-    to.last = 0;
-    to.el.loop = true;
-    to.el.preload = 'auto';
-    to.el.src = track.url;
-    if (to.gain && ctx) to.gain.gain.setValueAtTime(0, ctx.currentTime);
-    setCurrent({ list, index });
-    intent = 'play';
-    to.el.play().then(
-      () => {
-        if (decks[active] !== to) return;
-        if (intent === 'pause') {
-          to.el.pause();
+  /** A decoded track looping exactly over its audio. */
+  const bufferVoice = (buf: AudioBuffer, track: LoopTrack, offset: number): MusicVoice => {
+    const c = ctx!;
+    const [loopStart, loopEnd] = loopPoints(buf.duration, track);
+    const length = loopEnd - loopStart;
+    const src = c.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    src.loopStart = loopStart;
+    src.loopEnd = loopEnd;
+    const g = c.createGain();
+    g.gain.value = 0;
+    src.connect(g).connect(duck);
+    const at = Math.min(Math.max(0, offset), Math.max(0, length - 0.05));
+    const t0 = c.currentTime;
+    src.start(t0, loopStart + at);
+    let stopped = false;
+    return {
+      position: () => (at + c.currentTime - t0) % length,
+      fade: (to, seconds) => ramp(g.gain, to, seconds),
+      stop: () => {
+        if (stopped) return;
+        stopped = true;
+        ramp(g.gain, 0, 0.015);
+        src.onended = () => {
+          src.disconnect();
+          g.disconnect();
+        };
+        src.stop(c.currentTime + 0.03);
+      },
+    };
+  };
+
+  const release = (s: Stream) => {
+    s.el.pause();
+    s.el.removeAttribute('src');
+    s.el.load();
+    s.busy = false;
+  };
+
+  /** A long track streaming through an <audio> element (which loops it). */
+  const loadStream = (track: LoopTrack, signal: AbortSignal): Promise<Loaded | null> =>
+    new Promise((resolve) => {
+      const s = streams.find((x) => !x.busy);
+      if (!s || signal.aborted) return resolve(null);
+      s.busy = true;
+      const el = s.el;
+      const settle = (ok: boolean) => {
+        el.removeEventListener('canplay', onReady);
+        el.removeEventListener('error', onFail);
+        signal.removeEventListener('abort', onFail);
+        if (!ok) {
+          release(s);
+          resolve(null);
           return;
         }
-        setPlaying(true);
-        fade(to, track.gain, seconds);
+        el.pause();
+        let used = false;
+        resolve({
+          start: (offset) => {
+            used = true;
+            return streamVoice(s, offset);
+          },
+          dispose: () => {
+            if (!used) release(s);
+          },
+        });
+      };
+      const onReady = () => settle(true);
+      const onFail = () => settle(false);
+      el.addEventListener('canplay', onReady);
+      el.addEventListener('error', onFail);
+      signal.addEventListener('abort', onFail);
+      el.loop = true;
+      el.preload = 'auto';
+      el.src = track.url;
+      s.gain.gain.cancelScheduledValues(0);
+      s.gain.gain.value = 0;
+      // Playing (silently) starts the download everywhere: iOS ignores preload and waits for play().
+      el.play().catch(() => {});
+    });
+
+  const streamVoice = (s: Stream, offset: number): MusicVoice => {
+    const el = s.el;
+    if (offset > 0) el.currentTime = offset;
+    el.play().catch(() => {});
+    let stopped = false;
+    return {
+      position: () => el.currentTime,
+      fade: (to, seconds) => ramp(s.gain.gain, to, seconds),
+      stop: () => {
+        if (stopped) return;
+        stopped = true;
+        ramp(s.gain.gain, 0, 0.015);
+        window.setTimeout(() => release(s), 40);
       },
-      () => {
-        if (decks[active] === to) setPlaying(false);
-      },
-    );
-    if (from.track) {
-      fade(from, 0, seconds);
-      const old = from.track;
-      window.setTimeout(() => {
-        if (from.track === old && decks[active] !== from) from.el.pause();
-      }, seconds * 1000 + 100);
-    }
+    };
   };
 
-  const advance = () => {
-    const c = current();
-    if (!c || c.list.length < 2) return;
-    advancing = true;
-    start(c.list, (c.index + 1) % c.list.length, CROSSFADE);
+  const output: MusicOutput = {
+    later: (fn, ms) => {
+      const id = window.setTimeout(fn, ms);
+      return () => window.clearTimeout(id);
+    },
+    async load(track, signal) {
+      if (!ctx) return null;
+      if (track.duration > STREAM_OVER) return loadStream(track, signal);
+      const buf = await decodeTrack(track.url, signal);
+      if (!buf) return null;
+      return { start: (offset) => bufferVoice(buf, track, offset), dispose: () => {} };
+    },
   };
 
-  for (const d of decks) {
-    d.el.addEventListener('timeupdate', () => {
-      if (decks[active] !== d || !d.track) return;
-      const t = d.el.currentTime;
-      if (t + 1 < d.last) d.loops++;
-      d.last = t;
-      if (!advancing && d.loops >= d.track.repeat - 1 && d.el.duration - t <= CROSSFADE + 0.3) advance();
-    });
-    d.el.addEventListener('error', () => {
-      if (decks[active] !== d || !d.track || d.el.src === SILENCE) return;
-      const c = current();
-      // A missing file: try the next one, or stop if this was the only one.
-      if (c && c.list.length > 1) window.setTimeout(advance, 500);
-      else setPlaying(false);
-    });
-  }
+  const player = new MusicPlayer(output, setMusicState);
 
   const music = {
-    current,
-    playing,
-    /** Plays a list of tracks from `index`, cross-fading from whatever plays now. */
-    play(list: MusicTrack[], index = 0) {
+    /** The track asked for, whether it plays, loads or failed to load. */
+    state: musicState,
+    /** Plays a track in a loop, cross-fading from whatever plays now (nothing happens if it already plays). */
+    play(track: LoopTrack) {
       if (!ctx) return;
-      start(list, index, playing() ? CROSSFADE : 1.5);
+      player.play(track);
     },
-    skip: advance,
     /** Fades out and pauses; `resume` picks up where it was. */
-    pause(seconds = 0.6) {
-      intent = 'pause';
-      const d = decks[active]!;
-      if (!d.track) return;
-      if (!playing()) {
-        d.el.pause();
-        return;
-      }
-      setPlaying(false);
-      fade(d, 0, seconds);
-      window.setTimeout(() => {
-        if (intent === 'pause') d.el.pause();
-      }, seconds * 1000 + 50);
-    },
-    resume() {
-      const d = decks[active]!;
-      if (!d.track || playing() || !ctx) return;
-      intent = 'play';
-      d.el.play().then(
-        () => {
-          if (intent === 'pause' || decks[active] !== d) {
-            d.el.pause();
-            return;
-          }
-          setPlaying(true);
-          fade(d, d.track?.gain ?? 1, 1.5);
-        },
-        () => {},
-      );
-    },
-    stop(seconds = 0.8) {
-      music.pause(seconds);
-      setCurrent(null);
-      for (const d of decks) d.track = null;
-    },
+    pause: (seconds = 0.6) => player.pause(seconds),
+    resume: () => ctx && player.resume(),
+    stop: (seconds = 0.8) => player.stop(seconds),
   };
 
   // ---- Previews (the taste test and the Customize panel) ----
 
+  // Every preview gets a number; a late callback from an earlier one sees it isn't current and does nothing.
+  let previewToken = 0;
+
   const stopPreview = () => {
     window.clearTimeout(previewTimer);
+    previewToken++;
     if (!previewing()) return;
     setPreviewing(null);
     if (ctx && previewGain) {
       const t = ctx.currentTime;
       previewGain.gain.cancelScheduledValues(t);
       previewGain.gain.setTargetAtTime(0.0001, t, 0.08);
-      duck.gain.cancelScheduledValues(t);
-      duck.gain.setTargetAtTime(1, t + 0.2, 0.4);
     }
-    window.setTimeout(() => !previewing() && previewEl.pause(), 400);
+    previewDuck = false;
+    applyDuck();
+    const token = previewToken;
+    window.setTimeout(() => token === previewToken && previewEl?.pause(), 400);
   };
 
   /** Plays `seconds` of a track from `at` at `gain`, with the music faded away underneath. */
   const previewMusic = (key: string, url: string, at: number, seconds = 12, gain = 1) => {
-    if (!ctx || !previewGain) return;
+    const el = previewEl;
+    const pg = previewGain;
+    if (!ctx || !el || !pg) return;
     window.clearTimeout(previewTimer);
+    const token = ++previewToken;
     setPreviewing(key);
     const t = ctx.currentTime;
-    duck.gain.cancelScheduledValues(t);
-    duck.gain.setTargetAtTime(0, t, 0.1);
+    previewDuck = true;
+    applyDuck();
     previewBus.gain.setTargetAtTime(Math.max(settings().musicVolume, 0.45) ** 2, t, 0.01);
-    previewGain.gain.cancelScheduledValues(t);
-    previewGain.gain.setValueAtTime(0.0001, t);
+    pg.gain.cancelScheduledValues(t);
+    pg.gain.setTargetAtTime(0.0001, t, 0.03);
     const begin = () => {
-      previewEl.currentTime = at;
-      previewEl.play().then(
+      if (token !== previewToken) return;
+      el.currentTime = at;
+      el.play().then(
         () => {
-          if (!ctx || !previewGain || previewing() !== key) return;
+          if (!ctx || token !== previewToken) return;
           const now = ctx.currentTime;
-          previewGain.gain.setTargetAtTime(gain, now, 0.15);
-          previewGain.gain.setTargetAtTime(0.0001, now + seconds - 1.2, 0.35);
+          pg.gain.cancelScheduledValues(now);
+          pg.gain.setTargetAtTime(gain, now, 0.15);
+          pg.gain.setTargetAtTime(0.0001, now + seconds - 1.2, 0.35);
           previewTimer = window.setTimeout(stopPreview, seconds * 1000);
         },
-        () => setPreviewing(null),
+        () => token === previewToken && stopPreview(),
       );
     };
     const absolute = new URL(url, location.href).href;
-    if (previewEl.src !== absolute) {
-      previewEl.preload = 'auto';
-      previewEl.src = url;
-      previewEl.addEventListener('loadedmetadata', begin, { once: true });
-      previewEl.load();
+    if (el.src !== absolute) {
+      el.preload = 'auto';
+      el.src = url;
+      el.addEventListener('loadedmetadata', begin, { once: true });
+      el.load();
     } else begin();
   };
 

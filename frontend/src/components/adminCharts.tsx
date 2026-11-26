@@ -5,8 +5,9 @@
  */
 import { createMemo, createSignal, For, Show } from 'solid-js';
 import { EXPERIMENTS, variantLabel, type Experiment } from '../lib/experiments';
+import { musicPack } from '../lib/musicPacks';
 import { ChartTooltip, Columns, Donut, LineChart, Legend, SERIES, StatTile, BarList, type BarRow } from './charts';
-import { ConfidenceBadge, FACES, SOURCES, summarize, useFeedback, useResults, useVisitors, useVotes, type FeedbackItem } from './adminAb';
+import { ConfidenceBadge, FACES, SOURCES, summarize, useFeedback, useResults, useVisitors, useVotes, type FeedbackItem, type TasteSummary } from './adminAb';
 import { TAGS } from './QuickRating';
 import { Card, Tabs } from './ui';
 
@@ -14,8 +15,16 @@ const HOUR = 3_600_000;
 const SIZES = [HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR, 24 * HOUR, 7 * 24 * HOUR];
 const NEGATIVE = new Set(['hard_to_read', 'too_dark', 'music_annoying', 'sounds_annoying', 'confusing', 'slow_buggy']);
 
-/** A version keeps its colour everywhere: its place in the experiment's list. */
-const colorOf = (e: Experiment, id: string) => SERIES[Math.max(0, e.variants.findIndex((v) => v.id === id)) % SERIES.length]!;
+/**
+ * A version keeps its colour everywhere: its place in the experiment's list. An experiment with more versions than
+ * there are colours (the ten music packs) gets one hue, shown as ranked bars that name each version: cycling the
+ * colours would paint two versions the same.
+ */
+const colorOf = (e: Experiment, id: string) =>
+  e.variants.length > SERIES.length ? SERIES[0] : SERIES[Math.max(0, e.variants.findIndex((v) => v.id === id)) % SERIES.length]!;
+/** The music packs' versions: one experiment per pack with several. */
+const versionExperiments = () => EXPERIMENTS.filter((e) => e.parent?.key === 'music_pack');
+const packTitle = (e: Experiment) => musicPack(e.parent?.variant ?? '')?.title ?? e.title;
 const percent = (x: number) => `${Math.round(100 * x)}%`;
 
 /** Counts per time bucket for each list of timestamps, with as few buckets as reads well (<= 36). */
@@ -75,38 +84,48 @@ function Activity() {
   );
 }
 
+/** One experiment's preference shares as ranked bars. */
+function Preferences(props: { summary: TasteSummary; title: string }) {
+  const s = () => props.summary;
+  const rows = (): BarRow[] =>
+    s().rows.map((r) => ({
+      key: r.id,
+      label: variantLabel(s().experiment.key, r.id),
+      value: r.strength,
+      display: percent(r.strength),
+      color: colorOf(s().experiment, r.id),
+      detail: [
+        { label: 'chance it’s the favourite', value: percent(r.best) },
+        { label: 'head-to-heads won', value: `${r.wins} of ${r.games}` },
+      ],
+    }));
+  return (
+    <section>
+      <div class="mb-2 flex flex-wrap items-center gap-2">
+        <h3 class="text-sm font-semibold">{props.title}</h3>
+        <ConfidenceBadge level={s().confidence} />
+        <span class="text-xs text-ink-400">{s().decided === 1 ? '1 answer' : `${s().decided} answers`}</span>
+      </div>
+      <BarList rows={rows()} max={Math.max(0.5, ...s().rows.map((r) => r.strength))} empty="No answers yet" />
+    </section>
+  );
+}
+
 function TastePreferences() {
   const votes = useVotes();
-  const summaries = createMemo(() => EXPERIMENTS.filter((e) => e.taste).map((e) => summarize(e, votes.data ?? [])));
+  const summaries = createMemo(() => EXPERIMENTS.filter((e) => e.taste && !e.parent).map((e) => summarize(e, votes.data ?? [])));
+  const versions = createMemo(() => versionExperiments().map((e) => summarize(e, votes.data ?? [])));
   return (
     <Card title="Taste test: preference share" class="mt-6" actions={<span class="text-xs text-ink-400">from all head-to-head answers</span>}>
       <div class="grid gap-x-6 gap-y-5 p-4 md:grid-cols-2">
-        <For each={summaries()}>
-          {(s) => {
-            const rows = (): BarRow[] =>
-              s.rows.map((r) => ({
-                key: r.id,
-                label: variantLabel(s.experiment.key, r.id),
-                value: r.strength,
-                display: percent(r.strength),
-                color: colorOf(s.experiment, r.id),
-                detail: [
-                  { label: 'chance it’s the favourite', value: percent(r.best) },
-                  { label: 'head-to-heads won', value: `${r.wins} of ${r.games}` },
-                ],
-              }));
-            return (
-              <section>
-                <div class="mb-2 flex flex-wrap items-center gap-2">
-                  <h3 class="text-sm font-semibold">{s.experiment.title}</h3>
-                  <ConfidenceBadge level={s.confidence} />
-                  <span class="text-xs text-ink-400">{s.decided === 1 ? '1 answer' : `${s.decided} answers`}</span>
-                </div>
-                <BarList rows={rows()} max={Math.max(0.5, ...s.rows.map((r) => r.strength))} empty="No answers yet" />
-              </section>
-            );
-          }}
-        </For>
+        <For each={summaries()}>{(s) => <Preferences summary={s} title={s.experiment.title} />}</For>
+      </div>
+      <div class="border-t border-ink-800 p-4">
+        <h3 class="text-sm font-semibold">Music: which version of each pack</h3>
+        <p class="mb-3 text-xs text-ink-400">Asked right after the music question, about the pack the person picked.</p>
+        <div class="grid gap-x-6 gap-y-5 md:grid-cols-2 xl:grid-cols-3">
+          <For each={versions()}>{(s) => <Preferences summary={s} title={packTitle(s.experiment)} />}</For>
+        </div>
       </div>
     </Card>
   );
@@ -114,24 +133,72 @@ function TastePreferences() {
 
 function VersionsNow() {
   const results = useResults();
-  // A split into two is a single ratio, not a pie: only experiments with three or more versions get a donut.
-  const exps = () => EXPERIMENTS.filter((e) => e.variants.length >= 3);
+  const onIt = (e: Experiment) => {
+    const r = results.data?.find((x) => x.experiment === e.key);
+    return e.variants.map((v) => ({ id: v.id, label: v.label, value: r?.variants.find((x) => x.variant === v.id)?.onItNow ?? 0 }));
+  };
+  /** Bars, ranked for the ten packs, in list order for a pack's few versions; the share is in the tooltip. */
+  const bars = (e: Experiment, ranked: boolean): BarRow[] => {
+    const parts = onIt(e);
+    const total = parts.reduce((s, p) => s + p.value, 0);
+    const rows = parts.map((p) => ({
+      key: p.id,
+      label: p.label,
+      value: p.value,
+      display: String(p.value),
+      color: colorOf(e, p.id),
+      detail: [{ label: `of ${total}`, value: total ? percent(p.value / total) : '–' }],
+    }));
+    return ranked ? rows.sort((a, b) => b.value - a.value) : rows;
+  };
+  // A split into two is a single ratio, not a pie: only experiments with three or more versions get a chart here. A
+  // donut for a few versions; ranked bars when there are too many for a donut (the ten music packs).
+  const exps = () => EXPERIMENTS.filter((e) => e.variants.length >= 3 && !e.parent);
+  const many = (e: Experiment) => e.variants.length > SERIES.length;
   return (
     <Card title="Who is on which version now" class="mt-6" actions={<span class="text-xs text-ink-400">given at random, or picked</span>}>
       <div class="grid gap-6 p-4 md:grid-cols-2 xl:grid-cols-3">
         <For each={exps()}>
           {(e) => {
-            const r = () => results.data?.find((x) => x.experiment === e.key);
-            const parts = () => e.variants.map((v) => ({ label: v.label, value: r()?.variants.find((x) => x.variant === v.id)?.onItNow ?? 0, color: colorOf(e, v.id) }));
-            const total = () => parts().reduce((s, p) => s + p.value, 0);
+            const total = () => onIt(e).reduce((s, p) => s + p.value, 0);
             return (
               <section>
-                <h3 class="mb-2 text-sm font-semibold">{e.title}</h3>
-                <Donut parts={parts()} centre={String(total())} centreSub={total() === 1 ? 'visitor' : 'visitors'} />
+                <h3 class="mb-2 text-sm font-semibold">
+                  {e.title}
+                  <Show when={many(e)}>
+                    <span class="ml-2 text-xs font-normal text-ink-400">{total() === 1 ? '1 visitor' : `${total()} visitors`}</span>
+                  </Show>
+                </h3>
+                <Show
+                  when={many(e)}
+                  fallback={
+                    <Donut
+                      parts={onIt(e).map((p) => ({ label: p.label, value: p.value, color: colorOf(e, p.id) }))}
+                      centre={String(total())}
+                      centreSub={total() === 1 ? 'visitor' : 'visitors'}
+                    />
+                  }
+                >
+                  <BarList rows={bars(e, true)} />
+                </Show>
               </section>
             );
           }}
         </For>
+      </div>
+      <div class="border-t border-ink-800 p-4">
+        <h3 class="text-sm font-semibold">Music: the version within each pack</h3>
+        <p class="mb-3 text-xs text-ink-400">Everyone is given a version of every pack; counted here once they’ve heard that pack.</p>
+        <div class="grid gap-x-6 gap-y-5 md:grid-cols-2 xl:grid-cols-3">
+          <For each={versionExperiments()}>
+            {(e) => (
+              <section>
+                <h4 class="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-400">{packTitle(e)}</h4>
+                <BarList rows={bars(e, false)} />
+              </section>
+            )}
+          </For>
+        </div>
       </div>
     </Card>
   );

@@ -90,8 +90,11 @@ public class AbController {
 
     public record Created(long id) {}
 
-    /** What a logged-in player picked on other devices, so their versions follow them. */
-    public record Mine(UUID visitorId, Map<String, String> choices) {}
+    /**
+     * What a logged-in player was given and picked on other devices, so their versions follow them: assigned is what
+     * the dashboard counts them under, which a new device can't always work out again (a version added since, say).
+     */
+    public record Mine(UUID visitorId, Map<String, String> choices, Map<String, String> assigned) {}
 
     /** Records which version of each experiment the visitor is seeing (and links them to their account if logged in). */
     @PostMapping("/api/ab/assignments")
@@ -172,13 +175,17 @@ public class AbController {
         UUID visitorId = jdbc.sql("SELECT visitor_id FROM ab_assignments WHERE user_id = ? ORDER BY first_seen LIMIT 1")
                 .param(userId).query(UUID.class).optional().orElse(null);
         Map<String, String> choices = new LinkedHashMap<>();
+        Map<String, String> assigned = new LinkedHashMap<>();
         if (visitorId != null) {
-            jdbc.sql("""
-                    SELECT experiment, current_variant FROM ab_assignments
-                    WHERE visitor_id = ? AND current_variant <> assigned_variant""")
-                    .param(visitorId).query((RowCallbackHandler) rs -> choices.put(rs.getString(1), rs.getString(2)));
+            jdbc.sql("SELECT experiment, assigned_variant, current_variant FROM ab_assignments WHERE visitor_id = ?")
+                    .param(visitorId).query((RowCallbackHandler) rs -> {
+                        assigned.put(rs.getString(1), rs.getString(2));
+                        if (!rs.getString(2).equals(rs.getString(3))) {
+                            choices.put(rs.getString(1), rs.getString(3));
+                        }
+                    });
         }
-        return new Mine(visitorId, choices);
+        return new Mine(visitorId, choices, assigned);
     }
 
     @PostMapping("/api/feedback")
